@@ -119,3 +119,17 @@ Once you've done that, you can run the `citus_indent` command to recursively che
 correct the style of any source files in the current directory. You can also run `make
 reindent` from within the Citus repo to correct the style of all source files in the
 repository.
+
+### Running the tests
+
+Travis will run tests and reject your PR if they fail. Since travis takes a while to run,
+a faster way to iterate is to run the tests yourself! Running `make check` from the
+root of the repo, 
+
+### Allowing us to tweak your PRs before merging
+
+We're a bit picky about style and occasionally PRs devolve into a series of requests for
+capitalization and other small formatting changes. This is often necessary because the
+reviewer is unable to push their own changes to your branch. You can also allow
+maintainers to make their own changes to your PRs by following the directions
+[here](https://help.github.com/articles/allowing-changes-to-a-pull-request-branch-created-from-a-fork/).
