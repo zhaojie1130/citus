@@ -3047,7 +3047,8 @@ DropIndexTaskList(Oid relationId, Oid indexId, DropStmt *dropStmt)
  *
  * leftRelationId is the relation id of actual distributed table which given command is
  * applied. rightRelationId is the relation id of distributed table which given command
- * refers to.
+ * refers to. In case the rightRelationId is a reference table, we still create inter-shard
+ * tasks among the relations.
  */
 static List *
 InterShardDDLTaskList(Oid leftRelationId, Oid rightRelationId,
@@ -3061,6 +3062,7 @@ InterShardDDLTaskList(Oid leftRelationId, Oid rightRelationId,
 	char *leftSchemaName = get_namespace_name(leftSchemaId);
 	char *escapedLeftSchemaName = quote_literal_cstr(leftSchemaName);
 
+	char rightPartitionMethod = PartitionMethod(rightRelationId);
 	List *rightShardList = LoadShardIntervalList(rightRelationId);
 	ListCell *rightShardCell = NULL;
 	Oid rightSchemaId = get_rel_namespace(rightRelationId);
@@ -3070,6 +3072,33 @@ InterShardDDLTaskList(Oid leftRelationId, Oid rightRelationId,
 	char *escapedCommandString = quote_literal_cstr(commandString);
 	uint64 jobId = INVALID_JOB_ID;
 	int taskId = 1;
+
+	/*
+	 * We allow right relation to be a reference table. In that case
+	 * expand the left shard list to provide 1-1 mapping for inter-shard
+	 * tasks. In case the left relation is a reference as well, this
+	 * becomes no-op.
+	 */
+	if (rightPartitionMethod == DISTRIBUTE_BY_NONE)
+	{
+		ShardInterval *rightShardInterval = NULL;
+
+		int rightShardCount = list_length(rightShardList);
+		int leftShardCount = list_length(leftShardList);
+
+		int requiredDuplicateShardCount = leftShardCount - rightShardCount;
+
+		Assert(rightShardCount == 1);
+
+		rightShardInterval = (ShardInterval *) linitial(rightShardList);
+
+		while (requiredDuplicateShardCount > 0)
+		{
+			rightShardList = lappend(rightShardList, rightShardInterval);
+
+			--requiredDuplicateShardCount;
+		}
+	}
 
 	/* lock metadata before getting placement lists */
 	LockShardListMetadata(leftShardList, ShareLock);
