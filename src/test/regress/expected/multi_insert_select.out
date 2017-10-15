@@ -691,7 +691,7 @@ INSERT INTO agg_events
               fist_table_agg;
 DEBUG:  distributed INSERT ... SELECT can only select from distributed tables
 DEBUG:  Collecting INSERT ... SELECT results on coordinator
-ERROR:  could not run distributed query with complex table expressions
+ERROR:  could not run distributed query with common table expressions
 HINT:  Consider using an equality filter on the distributed table's partition column.
 -- We don't support CTEs that consist of const values as well
 INSERT INTO agg_events

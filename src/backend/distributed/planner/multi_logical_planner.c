@@ -146,7 +146,8 @@ static Node * ResolveExternalParams(Node *inputNode, ParamListInfo boundParams);
 static MultiNode * MultiSubqueryPlanTree(Query *originalQuery,
 										 Query *queryTree,
 										 PlannerRestrictionContext *
-										 plannerRestrictionContext);
+										 plannerRestrictionContext,
+										 DeferredErrorMessage **deferredError);
 static List * SublinkList(Query *originalQuery);
 static bool ExtractSublinkWalker(Node *node, List **sublinkList);
 static MultiNode * SubqueryPushdownMultiPlanTree(Query *queryTree);
@@ -192,17 +193,25 @@ MultiLogicalPlanCreate(Query *originalQuery, Query *queryTree,
 	 * standard_planner() may replace the sublinks with anti/semi joins and
 	 * MultiPlanTree() cannot plan such queries.
 	 */
-	if (SubqueryEntryList(queryTree) != NIL || SublinkList(originalQuery) != NIL)
-	{
-		originalQuery = (Query *) ResolveExternalParams((Node *) originalQuery,
-														boundParams);
-		multiQueryNode = MultiSubqueryPlanTree(originalQuery, queryTree,
-											   plannerRestrictionContext);
-	}
-	else
+
+	/*
+	 * TODO: Add/refactor comments.
+	 */
+	DeferredErrorMessage *deferrredError = NULL;
+	originalQuery = (Query *) ResolveExternalParams((Node *) originalQuery,
+													boundParams);
+	multiQueryNode = MultiSubqueryPlanTree(originalQuery, queryTree,
+										   plannerRestrictionContext, &deferrredError);
+	if (multiQueryNode == NULL && ((SubqueryEntryList(queryTree) == NIL && SublinkList(
+										originalQuery) == NIL)))
 	{
 		multiQueryNode = MultiPlanTree(queryTree);
 	}
+	else if (multiQueryNode == NULL)
+	{
+		RaiseDeferredErrorInternal(deferrredError, ERROR);
+	}
+
 
 	/* add a root node to serve as the permanent handle to the tree */
 	rootNode = CitusMakeNode(MultiTreeRoot);
@@ -377,7 +386,8 @@ ExtractSublinkWalker(Node *node, List **sublinkList)
  */
 static MultiNode *
 MultiSubqueryPlanTree(Query *originalQuery, Query *queryTree,
-					  PlannerRestrictionContext *plannerRestrictionContext)
+					  PlannerRestrictionContext *plannerRestrictionContext,
+					  DeferredErrorMessage **deferredError)
 {
 	MultiNode *multiQueryNode = NULL;
 	DeferredErrorMessage *subqueryPushdownError = NULL;
@@ -415,10 +425,21 @@ MultiSubqueryPlanTree(Query *originalQuery, Query *queryTree,
 			SingleRelationRepartitionSubquery(originalQuery);
 		if (!singleRelationRepartitionSubquery)
 		{
-			RaiseDeferredErrorInternal(subqueryPushdownError, ERROR);
+			*deferredError = subqueryPushdownError;
+
+			/*
+			 * TODO: This is very hacky.
+			 */
+			return NULL;
 		}
 
 		subqueryEntryList = SubqueryEntryList(queryTree);
+
+		if (list_length(subqueryEntryList) != 1)
+		{
+			return NULL;
+		}
+
 		subqueryRangeTableEntry = (RangeTblEntry *) linitial(subqueryEntryList);
 		Assert(subqueryRangeTableEntry->rtekind == RTE_SUBQUERY);
 
@@ -1472,7 +1493,7 @@ MultiPlanTree(Query *queryTree)
 		subqueryTree = subqueryRangeTableEntry->subquery;
 
 		/* ensure if subquery satisfies preconditions */
-		Assert(DeferErrorIfUnsupportedSubqueryRepartition(subqueryTree) == NULL);
+		/*	Assert(DeferErrorIfUnsupportedSubqueryRepartition(subqueryTree) == NULL); */
 
 		subqueryNode = CitusMakeNode(MultiTable);
 		subqueryNode->relationId = SUBQUERY_RELATION_ID;

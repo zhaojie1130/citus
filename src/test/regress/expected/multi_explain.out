@@ -47,13 +47,13 @@ Sort
   ->  HashAggregate
         Group Key: remote_scan.l_quantity
         ->  Custom Scan (Citus Real-Time)
-              Task Count: 8
-              Tasks Shown: One of 8
+              Task Count: 32
+              Tasks Shown: One of 32
               ->  Task
                     Node: host=localhost port=57637 dbname=regression
                     ->  HashAggregate
-                          Group Key: l_quantity
-                          ->  Seq Scan on lineitem_290001 lineitem
+                          Group Key: lineitem.l_quantity
+                          ->  Seq Scan on lineitem_360000 lineitem
 -- Test JSON format
 EXPLAIN (COSTS FALSE, FORMAT JSON)
 	SELECT l_quantity, count(*) count_quantity FROM lineitem
@@ -80,8 +80,8 @@ EXPLAIN (COSTS FALSE, FORMAT JSON)
               "Parallel Aware": false,
               "Distributed Query": {
                 "Job": {
-                  "Task Count": 8,
-                  "Tasks Shown": "One of 8",
+                  "Task Count": 32,
+                  "Tasks Shown": "One of 32",
                   "Tasks": [
                     {
                       "Node": "host=localhost port=57637 dbname=regression",
@@ -93,13 +93,13 @@ EXPLAIN (COSTS FALSE, FORMAT JSON)
                               "Strategy": "Hashed",
                               "Partial Mode": "Simple",
                               "Parallel Aware": false,
-                              "Group Key": ["l_quantity"],
+                              "Group Key": ["lineitem.l_quantity"],
                               "Plans": [
                                 {
                                   "Node Type": "Seq Scan",
                                   "Parent Relationship": "Outer",
                                   "Parallel Aware": false,
-                                  "Relation Name": "lineitem_290001",
+                                  "Relation Name": "lineitem_360000",
                                   "Alias": "lineitem"
                                 }
                               ]
@@ -155,8 +155,8 @@ EXPLAIN (COSTS FALSE, FORMAT XML)
               <Parallel-Aware>false</Parallel-Aware>
               <Distributed-Query>
                 <Job>
-                  <Task-Count>8</Task-Count>
-                  <Tasks-Shown>One of 8</Tasks-Shown>
+                  <Task-Count>32</Task-Count>
+                  <Tasks-Shown>One of 32</Tasks-Shown>
                   <Tasks>
                     <Task>
                       <Node>host=localhost port=57637 dbname=regression</Node>
@@ -169,14 +169,14 @@ EXPLAIN (COSTS FALSE, FORMAT XML)
                               <Partial-Mode>Simple</Partial-Mode>
                               <Parallel-Aware>false</Parallel-Aware>
                               <Group-Key>
-                                <Item>l_quantity</Item>
+                                <Item>lineitem.l_quantity</Item>
                               </Group-Key>
                               <Plans>
                                 <Plan>
                                   <Node-Type>Seq Scan</Node-Type>
                                   <Parent-Relationship>Outer</Parent-Relationship>
                                   <Parallel-Aware>false</Parallel-Aware>
-                                  <Relation-Name>lineitem_290001</Relation-Name>
+                                  <Relation-Name>lineitem_360000</Relation-Name>
                                   <Alias>lineitem</Alias>
                                 </Plan>
                               </Plans>
@@ -225,8 +225,8 @@ EXPLAIN (COSTS FALSE, FORMAT YAML)
             Parallel Aware: false
             Distributed Query: 
               Job: 
-                Task Count: 8
-                Tasks Shown: "One of 8"
+                Task Count: 32
+                Tasks Shown: "One of 32"
                 Tasks: 
                   - Node: "host=localhost port=57637 dbname=regression"
                     Remote Plan: 
@@ -236,12 +236,12 @@ EXPLAIN (COSTS FALSE, FORMAT YAML)
                           Partial Mode: "Simple"
                           Parallel Aware: false
                           Group Key: 
-                            - "l_quantity"
+                            - "lineitem.l_quantity"
                           Plans: 
                             - Node Type: "Seq Scan"
                               Parent Relationship: "Outer"
                               Parallel Aware: false
-                              Relation Name: "lineitem_290001"
+                              Relation Name: "lineitem_360000"
                               Alias: "lineitem"
 
 -- Test Text format
@@ -253,13 +253,13 @@ Sort
   ->  HashAggregate
         Group Key: remote_scan.l_quantity
         ->  Custom Scan (Citus Real-Time)
-              Task Count: 8
-              Tasks Shown: One of 8
+              Task Count: 32
+              Tasks Shown: One of 32
               ->  Task
                     Node: host=localhost port=57637 dbname=regression
                     ->  HashAggregate
-                          Group Key: l_quantity
-                          ->  Seq Scan on lineitem_290001 lineitem
+                          Group Key: lineitem.l_quantity
+                          ->  Seq Scan on lineitem_360000 lineitem
 -- Test verbose
 EXPLAIN (COSTS FALSE, VERBOSE TRUE)
 	SELECT sum(l_quantity) / avg(l_quantity) FROM lineitem;
@@ -267,14 +267,14 @@ Aggregate
   Output: (sum(remote_scan."?column?") / (sum(remote_scan."?column?_1") / pg_catalog.sum(remote_scan."?column?_2")))
   ->  Custom Scan (Citus Real-Time)
         Output: remote_scan."?column?", remote_scan."?column?_1", remote_scan."?column?_2"
-        Task Count: 8
-        Tasks Shown: One of 8
+        Task Count: 32
+        Tasks Shown: One of 32
         ->  Task
               Node: host=localhost port=57637 dbname=regression
               ->  Aggregate
-                    Output: sum(l_quantity), sum(l_quantity), count(l_quantity)
-                    ->  Seq Scan on public.lineitem_290001 lineitem
-                          Output: l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment
+                    Output: sum(lineitem.l_quantity), sum(lineitem.l_quantity), count(lineitem.l_quantity)
+                    ->  Seq Scan on public.lineitem_360000 lineitem
+                          Output: lineitem.l_orderkey, lineitem.l_partkey, lineitem.l_suppkey, lineitem.l_linenumber, lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, lineitem.l_tax, lineitem.l_returnflag, lineitem.l_linestatus, lineitem.l_shipdate, lineitem.l_commitdate, lineitem.l_receiptdate, lineitem.l_shipinstruct, lineitem.l_shipmode, lineitem.l_comment
 -- Test join
 EXPLAIN (COSTS FALSE)
 	SELECT * FROM lineitem
@@ -284,30 +284,29 @@ Limit
   ->  Sort
         Sort Key: remote_scan.l_quantity
         ->  Custom Scan (Citus Real-Time)
-              Task Count: 8
-              Tasks Shown: One of 8
+              Task Count: 32
+              Tasks Shown: One of 32
               ->  Task
                     Node: host=localhost port=57637 dbname=regression
                     ->  Limit
                           ->  Sort
                                 Sort Key: lineitem.l_quantity
-                                ->  Merge Join
-                                      Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
-                                      ->  Index Scan using orders_pkey_290008 on orders_290008 orders
-                                      ->  Sort
-                                            Sort Key: lineitem.l_orderkey
-                                            ->  Seq Scan on lineitem_290001 lineitem
-                                                  Filter: (l_quantity < 5.0)
+                                ->  Hash Join
+                                      Hash Cond: (lineitem.l_orderkey = orders.o_orderkey)
+                                      ->  Seq Scan on lineitem_360000 lineitem
+                                            Filter: (l_quantity < 5.0)
+                                      ->  Hash
+                                            ->  Seq Scan on orders_360032 orders
 -- Test insert
 EXPLAIN (COSTS FALSE)
 	INSERT INTO lineitem VALUES (1,0), (2, 0), (3, 0), (4, 0);
 Custom Scan (Citus Router)
-  Task Count: 1
-  Tasks Shown: All
+  Task Count: 4
+  Tasks Shown: One of 4
   ->  Task
         Node: host=localhost port=57638 dbname=regression
-        ->  Insert on lineitem_290000 citus_table_alias
-              ->  Values Scan on "*VALUES*"
+        ->  Insert on lineitem_360001 citus_table_alias
+              ->  Result
 -- Test update
 EXPLAIN (COSTS FALSE)
 	UPDATE lineitem
@@ -318,10 +317,12 @@ Custom Scan (Citus Router)
   Tasks Shown: All
   ->  Task
         Node: host=localhost port=57638 dbname=regression
-        ->  Update on lineitem_290000 lineitem
-              ->  Index Scan using lineitem_pkey_290000 on lineitem_290000 lineitem
-                    Index Cond: (l_orderkey = 1)
+        ->  Update on lineitem_360001 lineitem
+              ->  Bitmap Heap Scan on lineitem_360001 lineitem
+                    Recheck Cond: (l_orderkey = 1)
                     Filter: (l_partkey = 0)
+                    ->  Bitmap Index Scan on lineitem_pkey_360001
+                          Index Cond: (l_orderkey = 1)
 -- Test delete
 EXPLAIN (COSTS FALSE)
 	DELETE FROM lineitem
@@ -331,10 +332,12 @@ Custom Scan (Citus Router)
   Tasks Shown: All
   ->  Task
         Node: host=localhost port=57638 dbname=regression
-        ->  Delete on lineitem_290000 lineitem
-              ->  Index Scan using lineitem_pkey_290000 on lineitem_290000 lineitem
-                    Index Cond: (l_orderkey = 1)
+        ->  Delete on lineitem_360001 lineitem
+              ->  Bitmap Heap Scan on lineitem_360001 lineitem
+                    Recheck Cond: (l_orderkey = 1)
                     Filter: (l_partkey = 0)
+                    ->  Bitmap Index Scan on lineitem_pkey_360001
+                          Index Cond: (l_orderkey = 1)
 -- Test zero-shard update
 EXPLAIN (COSTS FALSE)
 	UPDATE lineitem
@@ -357,9 +360,11 @@ Custom Scan (Citus Router)
   Task Count: 1
   Tasks Shown: All
   ->  Task
-        Node: host=localhost port=57637 dbname=regression
-        ->  Index Scan using lineitem_pkey_290000 on lineitem_290000 lineitem
-              Index Cond: (l_orderkey = 5)
+        Node: host=localhost port=57638 dbname=regression
+        ->  Bitmap Heap Scan on lineitem_360006 lineitem
+              Recheck Cond: (l_orderkey = 5)
+              ->  Bitmap Index Scan on lineitem_pkey_360006
+                    Index Cond: (l_orderkey = 5)
 SELECT true AS valid FROM explain_xml($$
 	SELECT l_quantity FROM lineitem WHERE l_orderkey = 5$$);
 t
@@ -371,28 +376,28 @@ EXPLAIN (COSTS FALSE)
 	CREATE TABLE explain_result AS
 	SELECT * FROM lineitem;
 Custom Scan (Citus Real-Time)
-  Task Count: 8
-  Tasks Shown: One of 8
+  Task Count: 32
+  Tasks Shown: One of 32
   ->  Task
         Node: host=localhost port=57637 dbname=regression
-        ->  Seq Scan on lineitem_290001 lineitem
+        ->  Seq Scan on lineitem_360000 lineitem
 -- Test having
 EXPLAIN (COSTS FALSE, VERBOSE TRUE)
 	SELECT sum(l_quantity) / avg(l_quantity) FROM lineitem
 	HAVING sum(l_quantity) > 100;
 Aggregate
   Output: (sum(remote_scan."?column?") / (sum(remote_scan."?column?_1") / pg_catalog.sum(remote_scan."?column?_2")))
-  Filter: (sum(remote_scan.worker_column_4) > '100'::numeric)
+  Filter: (sum(remote_scan.worker_column_4) > (100)::numeric)
   ->  Custom Scan (Citus Real-Time)
         Output: remote_scan."?column?", remote_scan."?column?_1", remote_scan."?column?_2", remote_scan.worker_column_4
-        Task Count: 8
-        Tasks Shown: One of 8
+        Task Count: 32
+        Tasks Shown: One of 32
         ->  Task
               Node: host=localhost port=57637 dbname=regression
               ->  Aggregate
-                    Output: sum(l_quantity), sum(l_quantity), count(l_quantity), sum(l_quantity)
-                    ->  Seq Scan on public.lineitem_290001 lineitem
-                          Output: l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment
+                    Output: sum(lineitem.l_quantity), sum(lineitem.l_quantity), count(lineitem.l_quantity), sum(lineitem.l_quantity)
+                    ->  Seq Scan on public.lineitem_360000 lineitem
+                          Output: lineitem.l_orderkey, lineitem.l_partkey, lineitem.l_suppkey, lineitem.l_linenumber, lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, lineitem.l_tax, lineitem.l_returnflag, lineitem.l_linestatus, lineitem.l_shipdate, lineitem.l_commitdate, lineitem.l_receiptdate, lineitem.l_shipinstruct, lineitem.l_shipmode, lineitem.l_comment
 -- Test having without aggregate
 EXPLAIN (COSTS FALSE, VERBOSE TRUE)
 	SELECT l_quantity FROM lineitem
@@ -401,18 +406,18 @@ EXPLAIN (COSTS FALSE, VERBOSE TRUE)
 HashAggregate
   Output: remote_scan.l_quantity
   Group Key: remote_scan.l_quantity
-  Filter: ((remote_scan.worker_column_2)::double precision > ('100'::double precision * random()))
+  Filter: ((remote_scan.worker_column_2)::double precision > ((100)::double precision * random()))
   ->  Custom Scan (Citus Real-Time)
         Output: remote_scan.l_quantity, remote_scan.worker_column_2
-        Task Count: 8
-        Tasks Shown: One of 8
+        Task Count: 32
+        Tasks Shown: One of 32
         ->  Task
               Node: host=localhost port=57637 dbname=regression
               ->  HashAggregate
-                    Output: l_quantity, l_quantity
+                    Output: lineitem.l_quantity, lineitem.l_quantity
                     Group Key: lineitem.l_quantity
-                    ->  Seq Scan on public.lineitem_290001 lineitem
-                          Output: l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment
+                    ->  Seq Scan on public.lineitem_360000 lineitem
+                          Output: lineitem.l_orderkey, lineitem.l_partkey, lineitem.l_suppkey, lineitem.l_linenumber, lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, lineitem.l_tax, lineitem.l_returnflag, lineitem.l_linestatus, lineitem.l_shipdate, lineitem.l_commitdate, lineitem.l_receiptdate, lineitem.l_shipinstruct, lineitem.l_shipmode, lineitem.l_comment
 -- Subquery pushdown tests with explain
 EXPLAIN (COSTS OFF)
 SELECT
@@ -719,27 +724,167 @@ EXPLAIN (COSTS FALSE)
 	SELECT avg(l_linenumber) FROM lineitem WHERE l_orderkey > 9030;
 Aggregate
   ->  Custom Scan (Citus Real-Time)
-        Task Count: 4
+        Task Count: 32
         Tasks Shown: All
         ->  Task
               Node: host=localhost port=57637 dbname=regression
               ->  Aggregate
-                    ->  Seq Scan on lineitem_290005 lineitem
+                    ->  Seq Scan on lineitem_360000 lineitem
                           Filter: (l_orderkey > 9030)
         ->  Task
               Node: host=localhost port=57638 dbname=regression
               ->  Aggregate
-                    ->  Seq Scan on lineitem_290004 lineitem
+                    ->  Seq Scan on lineitem_360001 lineitem
                           Filter: (l_orderkey > 9030)
         ->  Task
               Node: host=localhost port=57637 dbname=regression
               ->  Aggregate
-                    ->  Seq Scan on lineitem_290007 lineitem
+                    ->  Seq Scan on lineitem_360002 lineitem
                           Filter: (l_orderkey > 9030)
         ->  Task
               Node: host=localhost port=57638 dbname=regression
               ->  Aggregate
-                    ->  Seq Scan on lineitem_290006 lineitem
+                    ->  Seq Scan on lineitem_360003 lineitem
+                          Filter: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57637 dbname=regression
+              ->  Aggregate
+                    ->  Index Only Scan using lineitem_pkey_360004 on lineitem_360004 lineitem
+                          Index Cond: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57638 dbname=regression
+              ->  Aggregate
+                    ->  Index Only Scan using lineitem_pkey_360005 on lineitem_360005 lineitem
+                          Index Cond: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57637 dbname=regression
+              ->  Aggregate
+                    ->  Index Only Scan using lineitem_pkey_360006 on lineitem_360006 lineitem
+                          Index Cond: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57638 dbname=regression
+              ->  Aggregate
+                    ->  Index Only Scan using lineitem_pkey_360007 on lineitem_360007 lineitem
+                          Index Cond: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57637 dbname=regression
+              ->  Aggregate
+                    ->  Seq Scan on lineitem_360008 lineitem
+                          Filter: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57638 dbname=regression
+              ->  Aggregate
+                    ->  Index Only Scan using lineitem_pkey_360009 on lineitem_360009 lineitem
+                          Index Cond: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57637 dbname=regression
+              ->  Aggregate
+                    ->  Index Only Scan using lineitem_pkey_360010 on lineitem_360010 lineitem
+                          Index Cond: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57638 dbname=regression
+              ->  Aggregate
+                    ->  Index Only Scan using lineitem_pkey_360011 on lineitem_360011 lineitem
+                          Index Cond: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57637 dbname=regression
+              ->  Aggregate
+                    ->  Index Only Scan using lineitem_pkey_360012 on lineitem_360012 lineitem
+                          Index Cond: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57638 dbname=regression
+              ->  Aggregate
+                    ->  Index Only Scan using lineitem_pkey_360013 on lineitem_360013 lineitem
+                          Index Cond: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57637 dbname=regression
+              ->  Aggregate
+                    ->  Seq Scan on lineitem_360014 lineitem
+                          Filter: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57638 dbname=regression
+              ->  Aggregate
+                    ->  Seq Scan on lineitem_360015 lineitem
+                          Filter: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57637 dbname=regression
+              ->  Aggregate
+                    ->  Seq Scan on lineitem_360016 lineitem
+                          Filter: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57638 dbname=regression
+              ->  Aggregate
+                    ->  Seq Scan on lineitem_360017 lineitem
+                          Filter: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57637 dbname=regression
+              ->  Aggregate
+                    ->  Index Only Scan using lineitem_pkey_360018 on lineitem_360018 lineitem
+                          Index Cond: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57638 dbname=regression
+              ->  Aggregate
+                    ->  Seq Scan on lineitem_360019 lineitem
+                          Filter: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57637 dbname=regression
+              ->  Aggregate
+                    ->  Index Only Scan using lineitem_pkey_360020 on lineitem_360020 lineitem
+                          Index Cond: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57638 dbname=regression
+              ->  Aggregate
+                    ->  Seq Scan on lineitem_360021 lineitem
+                          Filter: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57637 dbname=regression
+              ->  Aggregate
+                    ->  Seq Scan on lineitem_360022 lineitem
+                          Filter: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57638 dbname=regression
+              ->  Aggregate
+                    ->  Index Only Scan using lineitem_pkey_360023 on lineitem_360023 lineitem
+                          Index Cond: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57637 dbname=regression
+              ->  Aggregate
+                    ->  Index Only Scan using lineitem_pkey_360024 on lineitem_360024 lineitem
+                          Index Cond: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57638 dbname=regression
+              ->  Aggregate
+                    ->  Seq Scan on lineitem_360025 lineitem
+                          Filter: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57637 dbname=regression
+              ->  Aggregate
+                    ->  Seq Scan on lineitem_360026 lineitem
+                          Filter: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57638 dbname=regression
+              ->  Aggregate
+                    ->  Seq Scan on lineitem_360027 lineitem
+                          Filter: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57637 dbname=regression
+              ->  Aggregate
+                    ->  Seq Scan on lineitem_360028 lineitem
+                          Filter: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57638 dbname=regression
+              ->  Aggregate
+                    ->  Index Only Scan using lineitem_pkey_360029 on lineitem_360029 lineitem
+                          Index Cond: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57637 dbname=regression
+              ->  Aggregate
+                    ->  Index Only Scan using lineitem_pkey_360030 on lineitem_360030 lineitem
+                          Index Cond: (l_orderkey > 9030)
+        ->  Task
+              Node: host=localhost port=57638 dbname=regression
+              ->  Aggregate
+                    ->  Seq Scan on lineitem_360031 lineitem
                           Filter: (l_orderkey > 9030)
 SELECT true AS valid FROM explain_xml($$
 	SELECT avg(l_linenumber) FROM lineitem WHERE l_orderkey > 9030$$);
@@ -754,12 +899,12 @@ EXPLAIN (COSTS FALSE)
 	SELECT avg(l_linenumber) FROM lineitem WHERE l_orderkey > 9030;
 Aggregate
   ->  Custom Scan (Citus Task-Tracker)
-        Task Count: 4
-        Tasks Shown: One of 4
+        Task Count: 32
+        Tasks Shown: One of 32
         ->  Task
               Node: host=localhost port=57637 dbname=regression
               ->  Aggregate
-                    ->  Seq Scan on lineitem_290005 lineitem
+                    ->  Seq Scan on lineitem_360000 lineitem
                           Filter: (l_orderkey > 9030)
 -- Test re-partition join
 SET citus.large_table_shard_count TO 1;
@@ -771,14 +916,17 @@ EXPLAIN (COSTS FALSE)
 	AND l_suppkey = s_suppkey;
 Aggregate
   ->  Custom Scan (Citus Task-Tracker)
-        Task Count: 1
+        Task Count: 4
         Tasks Shown: None, not supported for re-partition queries
         ->  MapMergeJob
               Map Task Count: 1
-              Merge Task Count: 1
+              Merge Task Count: 4
               ->  MapMergeJob
-                    Map Task Count: 8
+                    Map Task Count: 32
                     Merge Task Count: 1
+        ->  MapMergeJob
+              Map Task Count: 32
+              Merge Task Count: 4
 EXPLAIN (COSTS FALSE, FORMAT JSON)
 	SELECT count(*)
 	FROM lineitem, orders, customer, supplier_single_shard
@@ -800,18 +948,22 @@ EXPLAIN (COSTS FALSE, FORMAT JSON)
           "Parallel Aware": false,
           "Distributed Query": {
             "Job": {
-              "Task Count": 1,
+              "Task Count": 4,
               "Tasks Shown": "None, not supported for re-partition queries",
               "Depended Jobs": [
                 {
                   "Map Task Count": 1,
-                  "Merge Task Count": 1,
+                  "Merge Task Count": 4,
                   "Depended Jobs": [
                     {
-                      "Map Task Count": 8,
+                      "Map Task Count": 32,
                       "Merge Task Count": 1
                     }
                   ]
+                },
+                {
+                  "Map Task Count": 32,
+                  "Merge Task Count": 4
                 }
               ]
             }
@@ -849,18 +1001,22 @@ EXPLAIN (COSTS FALSE, FORMAT XML)
           <Parallel-Aware>false</Parallel-Aware>
           <Distributed-Query>
             <Job>
-              <Task-Count>1</Task-Count>
+              <Task-Count>4</Task-Count>
               <Tasks-Shown>None, not supported for re-partition queries</Tasks-Shown>
               <Depended-Jobs>
                 <MapMergeJob>
                   <Map-Task-Count>1</Map-Task-Count>
-                  <Merge-Task-Count>1</Merge-Task-Count>
+                  <Merge-Task-Count>4</Merge-Task-Count>
                   <Depended-Jobs>
                     <MapMergeJob>
-                      <Map-Task-Count>8</Map-Task-Count>
+                      <Map-Task-Count>32</Map-Task-Count>
                       <Merge-Task-Count>1</Merge-Task-Count>
                     </MapMergeJob>
                   </Depended-Jobs>
+                </MapMergeJob>
+                <MapMergeJob>
+                  <Map-Task-Count>32</Map-Task-Count>
+                  <Merge-Task-Count>4</Merge-Task-Count>
                 </MapMergeJob>
               </Depended-Jobs>
             </Job>
@@ -908,14 +1064,16 @@ EXPLAIN (COSTS FALSE, FORMAT YAML)
         Parallel Aware: false
         Distributed Query: 
           Job: 
-            Task Count: 1
+            Task Count: 4
             Tasks Shown: "None, not supported for re-partition queries"
             Depended Jobs: 
               - Map Task Count: 1
-                Merge Task Count: 1
+                Merge Task Count: 4
                 Depended Jobs: 
-                  - Map Task Count: 8
+                  - Map Task Count: 32
                     Merge Task Count: 1
+              - Map Task Count: 32
+                Merge Task Count: 4
 -- test parallel aggregates
 SET parallel_setup_cost=0;
 SET parallel_tuple_cost=0;
@@ -935,24 +1093,24 @@ Finalize Aggregate
 EXPLAIN (COSTS FALSE) SELECT avg(l_linenumber) FROM lineitem;
 Aggregate
   ->  Custom Scan (Citus Task-Tracker)
-        Task Count: 8
-        Tasks Shown: One of 8
+        Task Count: 32
+        Tasks Shown: One of 32
         ->  Task
               Node: host=localhost port=57637 dbname=regression
               ->  Aggregate
-                    ->  Seq Scan on lineitem_290001 lineitem
+                    ->  Seq Scan on lineitem_360000 lineitem
 -- ensure EXPLAIN EXECUTE doesn't crash
 PREPARE task_tracker_query AS
 	SELECT avg(l_linenumber) FROM lineitem WHERE l_orderkey > 9030;
 EXPLAIN (COSTS FALSE) EXECUTE task_tracker_query;
 Aggregate
   ->  Custom Scan (Citus Task-Tracker)
-        Task Count: 4
-        Tasks Shown: One of 4
+        Task Count: 32
+        Tasks Shown: One of 32
         ->  Task
               Node: host=localhost port=57637 dbname=regression
               ->  Aggregate
-                    ->  Seq Scan on lineitem_290005 lineitem
+                    ->  Seq Scan on lineitem_360000 lineitem
                           Filter: (l_orderkey > 9030)
 SET citus.task_executor_type TO 'real-time';
 PREPARE router_executor_query AS SELECT l_quantity FROM lineitem WHERE l_orderkey = 5;
@@ -961,32 +1119,36 @@ Custom Scan (Citus Router)  (cost=0.00..0.00 rows=0 width=0)
   Task Count: 1
   Tasks Shown: All
   ->  Task
-        Node: host=localhost port=57637 dbname=regression
-        ->  Index Scan using lineitem_pkey_290000 on lineitem_290000 lineitem  (cost=0.28..11.83 rows=3 width=5)
-              Index Cond: (l_orderkey = 5)
+        Node: host=localhost port=57638 dbname=regression
+        ->  Bitmap Heap Scan on lineitem_360006 lineitem  (cost=4.29..9.31 rows=2 width=5)
+              Recheck Cond: (l_orderkey = 5)
+              ->  Bitmap Index Scan on lineitem_pkey_360006  (cost=0.00..4.29 rows=2 width=0)
+                    Index Cond: (l_orderkey = 5)
 PREPARE real_time_executor_query AS
 	SELECT avg(l_linenumber) FROM lineitem WHERE l_orderkey > 9030;
 EXPLAIN (COSTS FALSE) EXECUTE real_time_executor_query;
 Aggregate
   ->  Custom Scan (Citus Real-Time)
-        Task Count: 4
-        Tasks Shown: One of 4
+        Task Count: 32
+        Tasks Shown: One of 32
         ->  Task
               Node: host=localhost port=57637 dbname=regression
               ->  Aggregate
-                    ->  Seq Scan on lineitem_290005 lineitem
+                    ->  Seq Scan on lineitem_360000 lineitem
                           Filter: (l_orderkey > 9030)
 -- EXPLAIN EXECUTE of parametrized prepared statements is broken, but
 -- at least make sure to fail without crashing
 PREPARE router_executor_query_param(int) AS SELECT l_quantity FROM lineitem WHERE l_orderkey = $1;
 EXPLAIN EXECUTE router_executor_query_param(5);
+WARNING:  there is no parameter $1
+CONTEXT:  while executing command on localhost:57638
+WARNING:  there is no parameter $1
+CONTEXT:  while executing command on localhost:57637
 Custom Scan (Citus Router)  (cost=0.00..0.00 rows=0 width=0)
   Task Count: 1
   Tasks Shown: All
   ->  Task
-        Node: host=localhost port=57637 dbname=regression
-        ->  Index Scan using lineitem_pkey_290000 on lineitem_290000 lineitem  (cost=0.28..11.83 rows=3 width=5)
-              Index Cond: (l_orderkey = 5)
+        Error: Could not get remote plan.
 -- test explain in a transaction with alter table to test we use right connections
 BEGIN;
 CREATE TABLE explain_table(id int);
@@ -1008,7 +1170,7 @@ Custom Scan (Citus INSERT ... SELECT via coordinator)
               ->  Task
                     Node: host=localhost port=57637 dbname=regression
                     ->  Limit
-                          ->  Seq Scan on orders_hash_part_360295 orders_hash_part
+                          ->  Seq Scan on orders_hash_part_360423 orders_hash_part
 SELECT true AS valid FROM explain_json($$
   INSERT INTO lineitem_hash_part (l_orderkey)
   SELECT o_orderkey FROM orders_hash_part LIMIT 3;
@@ -1025,7 +1187,7 @@ Custom Scan (Citus INSERT ... SELECT via coordinator)
               ->  Task
                     Node: host=localhost port=57637 dbname=regression
                     ->  Limit
-                          ->  Seq Scan on orders_hash_part_360295 orders_hash_part
+                          ->  Seq Scan on orders_hash_part_360423 orders_hash_part
 EXPLAIN (COSTS OFF)
 INSERT INTO lineitem_hash_part (l_orderkey)
 SELECT s FROM generate_series(1,5) s;

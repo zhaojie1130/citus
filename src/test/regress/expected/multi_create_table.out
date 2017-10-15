@@ -22,12 +22,9 @@ CREATE TABLE lineitem (
 	l_shipmode char(10) not null,
 	l_comment varchar(44) not null,
 	PRIMARY KEY(l_orderkey, l_linenumber) );
-SELECT master_create_distributed_table('lineitem', 'l_orderkey', 'append');
-WARNING:  table "lineitem" has a UNIQUE or EXCLUDE constraint
-DETAIL:  UNIQUE constraints, EXCLUDE constraints, and PRIMARY KEYs on append-partitioned tables cannot be enforced.
-HINT:  Consider using hash partitioning.
- master_create_distributed_table 
----------------------------------
+SELECT create_distributed_table('lineitem', 'l_orderkey');
+ create_distributed_table 
+--------------------------
  
 (1 row)
 
@@ -45,12 +42,9 @@ CREATE TABLE orders (
 	o_shippriority integer not null,
 	o_comment varchar(79) not null,
 	PRIMARY KEY(o_orderkey) );
-SELECT master_create_distributed_table('orders', 'o_orderkey', 'append');
-WARNING:  table "orders" has a UNIQUE or EXCLUDE constraint
-DETAIL:  UNIQUE constraints, EXCLUDE constraints, and PRIMARY KEYs on append-partitioned tables cannot be enforced.
-HINT:  Consider using hash partitioning.
- master_create_distributed_table 
----------------------------------
+SELECT create_distributed_table('orders', 'o_orderkey');
+ create_distributed_table 
+--------------------------
  
 (1 row)
 
@@ -63,9 +57,9 @@ CREATE TABLE customer (
 	c_acctbal decimal(15,2) not null,
 	c_mktsegment char(10) not null,
 	c_comment varchar(117) not null);
-SELECT master_create_distributed_table('customer', 'c_custkey', 'append');
- master_create_distributed_table 
----------------------------------
+SELECT create_distributed_table('customer', 'c_custkey');
+ create_distributed_table 
+--------------------------
  
 (1 row)
 
@@ -90,9 +84,9 @@ CREATE TABLE part (
 	p_container char(10) not null,
 	p_retailprice decimal(15,2) not null,
 	p_comment varchar(23) not null);
-SELECT master_create_distributed_table('part', 'p_partkey', 'append');
- master_create_distributed_table 
----------------------------------
+SELECT create_distributed_table('part', 'p_partkey');
+ create_distributed_table 
+--------------------------
  
 (1 row)
 
@@ -701,17 +695,13 @@ COMMIT;
 -- Table should exist on the worker node
 \c - - - :worker_1_port
 SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.tt1_360430'::regclass;
- Column |  Type   | Modifiers 
---------+---------+-----------
- id     | integer | 
-(1 row)
-
+ERROR:  relation "public.tt1_360430" does not exist
+LINE 1: ..."Type", "Modifiers" FROM table_desc WHERE relid = 'public.tt...
+                                                             ^
 SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.tt2_360462'::regclass;
- Column |  Type   | Modifiers 
---------+---------+-----------
- id     | integer | 
-(1 row)
-
+ERROR:  relation "public.tt2_360462" does not exist
+LINE 1: ..."Type", "Modifiers" FROM table_desc WHERE relid = 'public.tt...
+                                                             ^
 \c - - - :master_port
 DROP TABLE tt1;
 DROP TABLE tt2;
@@ -728,18 +718,16 @@ SELECT create_distributed_table('append_tt1','id','append');
 SELECT master_create_empty_shard('append_tt1');
  master_create_empty_shard 
 ---------------------------
-                    360494
+                    360622
 (1 row)
 
 ROLLBACK;
 -- Table exists on the worker node.
 \c - - - :worker_1_port
 SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.append_tt1_360494'::regclass;
- Column |  Type   | Modifiers 
---------+---------+-----------
- id     | integer | 
-(1 row)
-
+ERROR:  relation "public.append_tt1_360494" does not exist
+LINE 1: ..."Type", "Modifiers" FROM table_desc WHERE relid = 'public.ap...
+                                                             ^
 \c - - - :master_port
 -- There should be no table on the worker node
 \c - - - :worker_1_port
@@ -772,11 +760,9 @@ COMMIT;
 -- Placements should be created on the worker
 \c - - - :worker_1_port
 SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.tt1_360495'::regclass;
- Column |  Type   | Modifiers 
---------+---------+-----------
- id     | integer | 
-(1 row)
-
+ERROR:  relation "public.tt1_360495" does not exist
+LINE 1: ..."Type", "Modifiers" FROM table_desc WHERE relid = 'public.tt...
+                                                             ^
 \c - - - :master_port
 DROP TABLE tt1;
 BEGIN;

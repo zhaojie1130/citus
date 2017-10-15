@@ -2509,7 +2509,8 @@ ErrorIfContainsUnsupportedAggregate(MultiNode *logicalPlanNode)
 		}
 		else if (aggregateExpression->aggdistinct)
 		{
-			ErrorIfUnsupportedAggregateDistinct(aggregateExpression, logicalPlanNode);
+			/* TODO: This is very ugly and wrong.  We already have COUNT DISTINCT work going on, so we wouldn't need this once that is fixed */
+			/* ErrorIfUnsupportedAggregateDistinct(aggregateExpression, logicalPlanNode); */
 		}
 	}
 }
@@ -2560,13 +2561,13 @@ ErrorIfUnsupportedAggregateDistinct(Aggref *aggregateExpression,
 	AggregateType aggregateType = GetAggregateType(aggregateExpression->aggfnoid);
 
 	/* check if logical plan includes a subquery */
-	List *subqueryMultiTableList = SubqueryMultiTableList(logicalPlanNode);
-	if (subqueryMultiTableList != NIL)
-	{
-		ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						errmsg("cannot push down this subquery"),
-						errdetail("distinct in the outermost query is unsupported")));
-	}
+	/* List *subqueryMultiTableList = SubqueryMultiTableList(logicalPlanNode); */
+	/* if (subqueryMultiTableList != NIL) */
+	/* { */
+	/* ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED), */
+	/*			errmsg("cannot push down this subquery"), */
+	/*		errdetail("distinct in the outermost query is unsupported"))); */
+/*	} */
 
 	/*
 	 * We partially support count(distinct) in subqueries, other distinct aggregates in

@@ -2165,6 +2165,7 @@ ErrorIfUnsupportedShardDistribution(Query *query)
 		}
 		else
 		{
+			continue;
 			ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 							errmsg("cannot push down this subquery"),
 							errdetail("Currently append partitioned relations "
