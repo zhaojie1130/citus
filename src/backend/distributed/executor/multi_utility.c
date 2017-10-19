@@ -1464,6 +1464,19 @@ ProcessVacuumStmt(VacuumStmt *vacuumStmt, const char *vacuumCommand)
 	List *taskList = NIL;
 	bool supportedVacuumStmt = false;
 
+#if (PG_VERSION_NUM >= 110000)
+	if (vacuumStmt->rels != NIL)
+	{
+		VacuumRelation *vacuumRelation = linitial(vacuumStmt->rels);
+
+		relationId = vacuumRelation->oid;
+
+		if (relationId == InvalidOid)
+		{
+			return;
+		}
+	}
+#else
 	if (vacuumStmt->relation != NULL)
 	{
 		LOCKMODE lockMode = (vacuumStmt->options & VACOPT_FULL) ?
@@ -1476,6 +1489,7 @@ ProcessVacuumStmt(VacuumStmt *vacuumStmt, const char *vacuumCommand)
 			return;
 		}
 	}
+#endif
 
 	supportedVacuumStmt = IsSupportedDistributedVacuumStmt(relationId, vacuumStmt);
 	if (!supportedVacuumStmt)
@@ -1507,8 +1521,33 @@ static bool
 IsSupportedDistributedVacuumStmt(Oid relationId, VacuumStmt *vacuumStmt)
 {
 	const char *stmtName = (vacuumStmt->options & VACOPT_VACUUM) ? "VACUUM" : "ANALYZE";
+	bool globalVacuum = false;
 
-	if (vacuumStmt->relation == NULL)
+#if (PG_VERSION_NUM >= 110000)
+	switch(list_length(vacuumStmt->rels))
+	{
+		case 0:
+		{
+			globalVacuum = true;
+			break;
+		}
+		case 1:
+		{ /* nothing to do; stmt might be supported */
+			break;
+		}
+		default:
+		{
+			ereport(WARNING, (errmsg("not propagating %s command to worker nodes", stmtName),
+							errhint("Provide a single table in order to %s "
+									"distributed tables.", stmtName)));
+			return false;
+		}
+	}
+#else
+	globalVacuum = (vacuumStmt->relation == NULL);
+#endif
+
+	if (globalVacuum)
 	{
 		/* WARN and exit early for unqualified VACUUM commands */
 		ereport(WARNING, (errmsg("not propagating %s command to worker nodes", stmtName),
@@ -1556,7 +1595,12 @@ VacuumTaskList(Oid relationId, VacuumStmt *vacuumStmt)
 	uint64 jobId = INVALID_JOB_ID;
 	int taskId = 1;
 	StringInfo vacuumString = DeparseVacuumStmtPrefix(vacuumStmt);
-	const char *columnNames = DeparseVacuumColumnNames(vacuumStmt->va_cols);
+#if (PG_VERSION_NUM >= 100000)
+	List *vacuumColumns = ((VacuumRelation *) linitial(vacuumStmt->rels))->va_cols;
+#else
+	List *vacuumColumns = vacuumStmt->va_cols;
+#endif
+	const char *columnNames = DeparseVacuumColumnNames(vacuumColumns);
 	const int vacuumPrefixLen = vacuumString->len;
 	Oid schemaId = get_rel_namespace(relationId);
 	char *schemaName = get_namespace_name(schemaId);
