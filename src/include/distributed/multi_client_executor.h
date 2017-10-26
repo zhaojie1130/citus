@@ -87,12 +87,10 @@ typedef enum TaskExecutionStatus
 } TaskExecutionStatus;
 
 
-struct pollfd; /* forward declared, to avoid having to include poll.h */
-
 typedef struct WaitInfo
 {
 	int maxWaiters;
-	struct pollfd *pollfds;
+	struct WaitEventSet *waitSet;
 	int registeredWaiters;
 	bool haveReadyWaiter;
 	bool haveFailedWaiter;

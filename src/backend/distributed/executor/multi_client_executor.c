@@ -13,6 +13,7 @@
  */
 
 #include "postgres.h"
+#include "pgstat.h"
 #include "fmgr.h"
 #include "libpq-fe.h"
 #include "miscadmin.h"
@@ -808,9 +809,15 @@ WaitInfo *
 MultiClientCreateWaitInfo(int maxConnections)
 {
 	WaitInfo *waitInfo = palloc(sizeof(WaitInfo));
+	WaitEventSet *waitEventSet = NULL;
 
 	waitInfo->maxWaiters = maxConnections;
-	waitInfo->pollfds = palloc(maxConnections * sizeof(struct pollfd));
+
+	waitEventSet = CreateWaitEventSet(CurrentMemoryContext, maxConnections + 2);
+	AddWaitEventToSet(waitEventSet, WL_POSTMASTER_DEATH, PGINVALID_SOCKET, NULL, NULL);
+	AddWaitEventToSet(waitEventSet, WL_LATCH_SET, PGINVALID_SOCKET, MyLatch, NULL);
+
+	waitInfo->waitSet = waitEventSet;
 
 	/* initialize remaining fields */
 	MultiClientResetWaitInfo(waitInfo);
@@ -823,9 +830,18 @@ MultiClientCreateWaitInfo(int maxConnections)
 void
 MultiClientResetWaitInfo(WaitInfo *waitInfo)
 {
+	WaitEventSet *waitEventSet = NULL;
+
 	waitInfo->registeredWaiters = 0;
 	waitInfo->haveReadyWaiter = false;
 	waitInfo->haveFailedWaiter = false;
+
+	FreeWaitEventSet(waitInfo->waitSet);
+	waitEventSet = CreateWaitEventSet(CurrentMemoryContext, waitInfo->maxWaiters + 2);
+	AddWaitEventToSet(waitEventSet, WL_POSTMASTER_DEATH, PGINVALID_SOCKET, NULL, NULL);
+	AddWaitEventToSet(waitEventSet, WL_LATCH_SET, PGINVALID_SOCKET, MyLatch, NULL);
+
+	waitInfo->waitSet = waitEventSet;
 }
 
 
@@ -833,7 +849,7 @@ MultiClientResetWaitInfo(WaitInfo *waitInfo)
 void
 MultiClientFreeWaitInfo(WaitInfo *waitInfo)
 {
-	pfree(waitInfo->pollfds);
+	FreeWaitEventSet(waitInfo->waitSet);
 	pfree(waitInfo);
 }
 
@@ -847,7 +863,8 @@ MultiClientRegisterWait(WaitInfo *waitInfo, TaskExecutionStatus executionStatus,
 						int32 connectionId)
 {
 	MultiConnection *connection = NULL;
-	struct pollfd *pollfd = NULL;
+	pgsocket sock = PGINVALID_SOCKET;
+	uint32 events = 0;
 
 	Assert(waitInfo->registeredWaiters < waitInfo->maxWaiters);
 
@@ -863,16 +880,17 @@ MultiClientRegisterWait(WaitInfo *waitInfo, TaskExecutionStatus executionStatus,
 	}
 
 	connection = ClientConnectionArray[connectionId];
-	pollfd = &waitInfo->pollfds[waitInfo->registeredWaiters];
-	pollfd->fd = PQsocket(connection->pgConn);
+	sock = PQsocket(connection->pgConn);
 	if (executionStatus == TASK_STATUS_SOCKET_READ)
 	{
-		pollfd->events = POLLERR | POLLIN;
+		events = WL_SOCKET_READABLE;
 	}
 	else if (executionStatus == TASK_STATUS_SOCKET_WRITE)
 	{
-		pollfd->events = POLLERR | POLLOUT;
+		events = WL_SOCKET_WRITEABLE;
 	}
+
+	AddWaitEventToSet(waitInfo->waitSet, events, sock, NULL, (void *) connection);
 	waitInfo->registeredWaiters++;
 }
 
@@ -904,6 +922,8 @@ MultiClientWait(WaitInfo *waitInfo)
 
 	while (true)
 	{
+		WaitEvent occuredEvent;
+
 		/*
 		 * Wait for activity on any of the sockets. Limit the maximum time
 		 * spent waiting in one wait cycle, as insurance against edge
@@ -911,41 +931,39 @@ MultiClientWait(WaitInfo *waitInfo)
 		 * citus.remote_task_check_interval, so rather arbitrarily sleep ten
 		 * times as long.
 		 */
-		int rc = poll(waitInfo->pollfds, waitInfo->registeredWaiters,
-					  RemoteTaskCheckInterval * 10);
+		int event = WaitEventSetWait(waitInfo->waitSet, RemoteTaskCheckInterval * 10,
+									 &occuredEvent, 1, WAIT_EVENT_CLIENT_READ);
 
-		if (rc < 0)
-		{
-			/*
-			 * Signals that arrive can interrupt our poll(). In that case just
-			 * check for interrupts, and try again. Every other error is
-			 * unexpected and treated as such.
-			 */
-			if (errno == EAGAIN || errno == EINTR)
-			{
-				CHECK_FOR_INTERRUPTS();
-
-				/* maximum wait starts at max again, but that's ok, it's just a stopgap */
-				continue;
-			}
-			else
-			{
-				ereport(ERROR, (errcode_for_file_access(),
-								errmsg("poll failed: %m")));
-			}
-		}
-		else if (rc == 0)
+		if (event == 0)
 		{
 			ereport(DEBUG5,
-					(errmsg("waiting for activity on tasks took longer than %d ms",
-							(int) RemoteTaskCheckInterval * 10)));
+					(errmsg("waiting for activity on tasks took longer than %ld ms",
+							(long) RemoteTaskCheckInterval * 10)));
+			return;
 		}
 
-		/*
-		 * At least one fd changed received a readiness notification, time to
-		 * process tasks again.
-		 */
-		return;
+		/* an event happened! */
+
+		if (occuredEvent.events & WL_POSTMASTER_DEATH)
+		{
+			ereport(ERROR, (errmsg("postmaster was shut down, exiting")));
+		}
+
+		if (occuredEvent.events & WL_LATCH_SET)
+		{
+			ResetLatch(MyLatch);
+			CHECK_FOR_INTERRUPTS();
+			continue;
+		}
+
+		if (occuredEvent.events & WL_SOCKET_MASK)
+		{
+			/*
+			 * At least one fd changed received a readiness notification, time to
+			 * process tasks again.
+			 */
+			return;
+		}
 	}
 }
 
