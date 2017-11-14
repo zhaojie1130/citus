@@ -509,10 +509,16 @@ IsProcessWaitingForSafeOperations(PGPROC *proc)
 {
 	PROCLOCK *waitProcLock = NULL;
 	LOCK *waitLock = NULL;
+	PGXACT *pgxact = NULL;
 
 	if (proc->waitStatus != STATUS_WAITING)
 	{
 		return false;
+	}
+
+	if (pgxact->vacuumFlags & PROC_IS_AUTOVACUUM)
+	{
+		return true;
 	}
 
 	waitProcLock = proc->waitProcLock;
