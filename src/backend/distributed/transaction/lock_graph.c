@@ -516,6 +516,7 @@ IsProcessWaitingForSafeOperations(PGPROC *proc)
 		return false;
 	}
 
+	pgxact = &ProcGlobal->allPgXact[proc->pgprocno];
 	if (pgxact->vacuumFlags & PROC_IS_AUTOVACUUM)
 	{
 		return true;
