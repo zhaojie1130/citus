@@ -718,7 +718,7 @@ MultiClientCreateWaitInfo(int maxConnections)
 	WaitInfo *waitInfo = palloc(sizeof(WaitInfo));
 
 	waitInfo->maxWaiters = maxConnections;
-	waitInfo->pollfds = palloc(maxConnections * sizeof(struct pollfd));
+	waitInfo->pollfds = palloc0(maxConnections * sizeof(struct pollfd));
 
 	/* initialize remaining fields */
 	MultiClientResetWaitInfo(waitInfo);
