@@ -158,7 +158,6 @@ static MultiNode * ApplyCartesianProduct(MultiNode *leftNode, MultiNode *rightNo
  */
 static bool ShouldUseSubqueryPushDown(Query *originalQuery, Query *rewrittenQuery);
 static bool IsFunctionRTE(Node *node);
-static bool FindNodeCheck(Node *node, bool (*check)(Node *));
 static Node * ResolveExternalParams(Node *inputNode, ParamListInfo boundParams);
 static MultiNode * SubqueryMultiNodeTree(Query *originalQuery,
 										 Query *queryTree,
@@ -287,7 +286,7 @@ IsFunctionRTE(Node *node)
  * To call this function directly with an RTE, use:
  * range_table_walker(rte, FindNodeCheck, check, QTW_EXAMINE_RTES)
  */
-static bool
+bool
 FindNodeCheck(Node *node, bool (*check)(Node *))
 {
 	if (node == NULL)
@@ -638,7 +637,12 @@ DeferErrorIfUnsupportedSubqueryPushdown(Query *originalQuery,
 	 */
 	if (ContainsUnionSubquery(originalQuery))
 	{
-		if (!SafeToPushdownUnionSubquery(plannerRestrictionContext))
+		DeferredErrorMessage *error = DeferErrorIfUnsupportedUnionQuery(originalQuery);
+		if (error != NULL)
+		{
+			return error;
+		}
+		else if (!SafeToPushdownUnionSubquery(plannerRestrictionContext))
 		{
 			return DeferredError(ERRCODE_FEATURE_NOT_SUPPORTED,
 								 "cannot pushdown the subquery since not all subqueries "
@@ -1578,15 +1582,11 @@ AllTargetExpressionsAreColumnReferences(List *targetEntryList)
  *
  * Note that the function doesn't recurse into subqueries, returns false when
  * a subquery is found.
- *
- * TODO: change the name of the function
  */
 static bool
 RangeTableListContainsOnlyReferenceTables(List *rangeTableList)
 {
 	ListCell *rangeTableCell = NULL;
-	RecurringTuplesType recurType = RECURRING_TUPLES_INVALID;
-
 	foreach(rangeTableCell, rangeTableList)
 	{
 		RangeTblEntry *rangeTableEntry = (RangeTblEntry *) lfirst(rangeTableCell);
@@ -1604,11 +1604,6 @@ RangeTableListContainsOnlyReferenceTables(List *rangeTableList)
 			{
 				return false;
 			}
-		}
-		else if (HasRecurringTuples((Node *) rangeTableEntry, &recurType))
-		{
-			/* we should allow GROUP BYs on intermediate results */
-			continue;
 		}
 		else
 		{

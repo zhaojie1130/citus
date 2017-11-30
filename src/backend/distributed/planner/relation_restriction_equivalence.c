@@ -188,10 +188,7 @@ SafeToPushdownUnionSubquery(PlannerRestrictionContext *plannerRestrictionContext
 		 */
 		if (PartitionMethod(relationId) == DISTRIBUTE_BY_NONE)
 		{
-			ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-							errmsg("cannot pushdown this query"),
-							errdetail(
-								"Reference tables are not allowed with set operations")));
+			return true;
 		}
 
 		/*
