@@ -174,6 +174,8 @@ sub replace_postgres
 	or die "Could not create postgres wrapper at $bindir/postgres.wrapper";
     print $fh <<"END";
 #!/bin/bash
+ulimit -c unlimited
+sudo echo 'core.%p.sig%s.%ts' | tee -a /proc/sys/kernel/core_pattern
 exec $valgrindPath \\
     --quiet \\
     --suppressions=${postgresSrcdir}/src/tools/valgrind.supp \\
