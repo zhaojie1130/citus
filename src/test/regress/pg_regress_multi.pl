@@ -164,19 +164,14 @@ if (defined $pgCtlTimeout)
 # only reliable way to do this.
 sub replace_postgres
 {
-    if (-e "$bindir/postgres.orig")
+    if (-e "$bindir/postgres.wrapper")
     {
-	print "wrapper exists\n";
-    }
-    else
-    {
-	print "moving $bindir/postgres to $bindir/postgres.orig\n";
-	rename "$bindir/postgres", "$bindir/postgres.orig"
-	    or die "Could not move postgres out of the way";
+	print "wrapper exists, removing\n";
+	unlink "$bindir/postgres.wrapper" or die "Could not remove wrapper";
     }
 
-    sysopen my $fh, "$bindir/postgres", O_CREAT|O_TRUNC|O_RDWR, 0700
-	or die "Could not create postgres wrapper at $bindir/postgres";
+    sysopen my $fh, "$bindir/postgres.wrapper", O_CREAT|O_TRUNC|O_RDWR, 0700
+	or die "Could not create postgres wrapper at $bindir/postgres.wrapper";
     print $fh <<"END";
 #!/bin/bash
 exec $valgrindPath \\
@@ -186,7 +181,7 @@ exec $valgrindPath \\
     --leak-check=no \\
     --error-markers=VALGRINDERROR-BEGIN,VALGRINDERROR-END \\
     --log-file=$valgrindLogFile \\
-    $bindir/postgres.orig \\
+    $bindir/postgres \\
     "\$@"
 END
     close $fh;
@@ -195,12 +190,10 @@ END
 # revert changes replace_postgres() performed
 sub revert_replace_postgres
 {
-    if (-e "$bindir/postgres.orig")
+    if (-e "$bindir/postgres.wrapper")
     {
 	print "wrapper exists, removing\n";
-	print "moving $bindir/postgres.orig to $bindir/postgres\n";
-	rename "$bindir/postgres.orig", "$bindir/postgres"
-	    or die "Could not move postgres back";
+	unlink "$bindir/postgres.wrapper" or die "Could not remove wrapper";
     }
 }
 
@@ -436,7 +429,7 @@ $serversAreShutdown = "FALSE";
 if(system("$bindir/pg_ctl",
        ('start', '-w',
         '-o', join(" ", @pgOptions)." -c port=$masterPort",
-       '-D', 'tmp_check/master/data', '-l', 'tmp_check/master/log/postmaster.log')) != 0)
+       '-D', 'tmp_check/master/data', '-l', 'tmp_check/master/log/postmaster.log', '-p', "$bindir/postgres.wrapper")) != 0)
 {
   system("tail", ("-n20", "tmp_check/master/log/postmaster.log"));
   die "Could not start master server";
@@ -448,7 +441,7 @@ for my $port (@workerPorts)
            ('start', '-w',
             '-o', join(" ", @pgOptions)." -c port=$port",
             '-D', "tmp_check/worker.$port/data",
-            '-l', "tmp_check/worker.$port/log/postmaster.log")) != 0)
+            '-l', "tmp_check/worker.$port/log/postmaster.log", '-p', "$bindir/postgres.wrapper")) != 0)
     {
       system("tail", ("-n20", "tmp_check/worker.$port/log/postmaster.log"));
       die "Could not start worker server";
@@ -478,7 +471,7 @@ if ($followercluster)
     if(system("$bindir/pg_ctl",
            ('start', '-w',
             '-o', join(" ", @pgOptions)." -c port=$followerCoordPort",
-           '-D', 'tmp_check/master-follower/data', '-l', 'tmp_check/master-follower/log/postmaster.log')) != 0)
+           '-D', 'tmp_check/master-follower/data', '-l', 'tmp_check/master-follower/log/postmaster.log', '-p', "$bindir/postgres.wrapper")) != 0)
     {
       system("tail", ("-n20", "tmp_check/master-follower/log/postmaster.log"));
       die "Could not start master follower server";
@@ -490,7 +483,7 @@ if ($followercluster)
                ('start', '-w',
                 '-o', join(" ", @pgOptions)." -c port=$port",
                 '-D', "tmp_check/follower.$port/data",
-                '-l', "tmp_check/follower.$port/log/postmaster.log")) != 0)
+                '-l', "tmp_check/follower.$port/log/postmaster.log", '-p', "$bindir/postgres.wrapper")) != 0)
         {
           system("tail", ("-n20", "tmp_check/follower.$port/log/postmaster.log"));
           die "Could not start follower server";
