@@ -54,7 +54,11 @@ int TaskTrackerDelay = 200;       /* process sleep interval in millisecs */
 int MaxRunningTasksPerNode = 16;  /* max number of running tasks */
 int MaxTrackedTasksPerNode = 1024; /* max number of tracked tasks */
 int MaxTaskStringSize = 12288; /* max size of a worker task call string in bytes */
-WorkerTasksSharedStateData *WorkerTasksSharedState; /* shared memory state */
+
+/* Links to shared memory state */
+LWLock *TaskTrackerLock = NULL;
+HTAB *TaskTrackerHash = NULL;
+
 
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 
@@ -63,7 +67,6 @@ static volatile sig_atomic_t got_SIGHUP = false;
 static volatile sig_atomic_t got_SIGTERM = false;
 
 /* initialization forward declarations */
-static Size TaskTrackerShmemSize(void);
 static void TaskTrackerShmemInit(void);
 
 /* Signal handler forward declarations */
@@ -98,7 +101,8 @@ TaskTrackerRegister(void)
 	BackgroundWorker worker;
 
 	/* organize and register initialization of required shared memory */
-	RequestAddinShmemSpace(TaskTrackerShmemSize());
+	RequestAddinShmemSpace(sizeof(LWLock *));
+	RequestNamedLWLockTranche("Worker Task Control", 1);
 
 	prev_shmem_startup_hook = shmem_startup_hook;
 	shmem_startup_hook = TaskTrackerShmemInit;
@@ -246,17 +250,17 @@ TaskTrackerMain(Datum main_arg)
 			ExitOnAnyError = true;
 
 			/* Close open connections to local backends */
-			TrackerCleanupConnections(WorkerTasksSharedState->taskHash);
+			TrackerCleanupConnections(TaskTrackerHash);
 
 			/* Add a sentinel task to the shared hash to mark shutdown */
-			TrackerRegisterShutDown(WorkerTasksSharedState->taskHash);
+			TrackerRegisterShutDown(TaskTrackerHash);
 
 			/* Normal exit from the task tracker is here */
 			proc_exit(0);
 		}
 
 		/* Call the function that does the actual work */
-		ManageWorkerTasksHash(WorkerTasksSharedState->taskHash);
+		ManageWorkerTasksHash(TaskTrackerHash);
 
 		/* Sleep for the configured time */
 		TrackerDelayLoop();
@@ -281,7 +285,7 @@ WorkerTasksHashEnter(uint64 jobId, uint32 taskId)
 	searchTask.taskId = taskId;
 
 	hashKey = (void *) &searchTask;
-	workerTask = (WorkerTask *) hash_search(WorkerTasksSharedState->taskHash, hashKey,
+	workerTask = (WorkerTask *) hash_search(TaskTrackerHash, hashKey,
 											HASH_ENTER_NULL, &handleFound);
 	if (workerTask == NULL)
 	{
@@ -318,7 +322,7 @@ WorkerTasksHashFind(uint64 jobId, uint32 taskId)
 	searchTask.taskId = taskId;
 
 	hashKey = (void *) &searchTask;
-	workerTask = (WorkerTask *) hash_search(WorkerTasksSharedState->taskHash, hashKey,
+	workerTask = (WorkerTask *) hash_search(TaskTrackerHash, hashKey,
 											HASH_FIND, NULL);
 
 	return workerTask;
@@ -368,7 +372,7 @@ TrackerCleanupJobSchemas(void)
 	const uint64 jobId = RESERVED_JOB_ID;
 	uint32 taskIndex = 1;
 
-	LWLockAcquire(&WorkerTasksSharedState->taskHashLock, LW_EXCLUSIVE);
+	LWLockAcquire(TaskTrackerLock, LW_EXCLUSIVE);
 
 	foreach(databaseNameCell, databaseNameList)
 	{
@@ -401,7 +405,7 @@ TrackerCleanupJobSchemas(void)
 		taskIndex++;
 	}
 
-	LWLockRelease(&WorkerTasksSharedState->taskHashLock);
+	LWLockRelease(TaskTrackerLock);
 
 	if (databaseNameList != NIL)
 	{
@@ -449,13 +453,13 @@ TrackerRegisterShutDown(HTAB *WorkerTasksHash)
 	uint32 taskId = SHUTDOWN_MARKER_TASK_ID;
 	WorkerTask *shutdownMarkerTask = NULL;
 
-	LWLockAcquire(&WorkerTasksSharedState->taskHashLock, LW_EXCLUSIVE);
+	LWLockAcquire(TaskTrackerLock, LW_EXCLUSIVE);
 
 	shutdownMarkerTask = WorkerTasksHashEnter(jobId, taskId);
 	shutdownMarkerTask->taskStatus = TASK_SUCCEEDED;
 	shutdownMarkerTask->connectionId = INVALID_CONNECTION_ID;
 
-	LWLockRelease(&WorkerTasksSharedState->taskHashLock);
+	LWLockRelease(TaskTrackerLock);
 }
 
 
@@ -524,22 +528,6 @@ TrackerShutdownHandler(SIGNAL_ARGS)
 }
 
 
-/* Estimates the shared memory size used for keeping track of tasks. */
-static Size
-TaskTrackerShmemSize(void)
-{
-	Size size = 0;
-	Size hashSize = 0;
-
-	size = add_size(size, sizeof(WorkerTasksSharedStateData));
-
-	hashSize = hash_estimate_size(MaxTrackedTasksPerNode, WORKER_TASK_SIZE);
-	size = add_size(size, hashSize);
-
-	return size;
-}
-
-
 /* Initializes the shared memory used for keeping track of tasks. */
 static void
 TaskTrackerShmemInit(void)
@@ -553,6 +541,23 @@ TaskTrackerShmemInit(void)
 	maxTableSize = (long) MaxTrackedTasksPerNode;
 	initTableSize = maxTableSize / 8;
 
+	/* reset in case this is a restart within the postmaster */
+	TaskTrackerLock = NULL;
+	TaskTrackerHash = NULL;
+
+	/*
+	 * Create or attach to the shared memory state, including hash table
+	 */
+	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
+
+	TaskTrackerLock = ShmemInitStruct("Worker Task Control", sizeof(LWLock *),
+									  &alreadyInitialized);
+
+	if (!alreadyInitialized)
+	{
+		TaskTrackerLock = &(GetNamedLWLockTranche("Worker Task Control"))->lock;
+	}
+
 	/*
 	 * Allocate the control structure for the hash table that maps unique task
 	 * identifiers (uint64:uint32) to general task information, as well as the
@@ -564,52 +569,13 @@ TaskTrackerShmemInit(void)
 	info.hash = tag_hash;
 	hashFlags = (HASH_ELEM | HASH_FUNCTION);
 
-	/*
-	 * Currently the lock isn't required because allocation only happens at
-	 * startup in postmaster, but it doesn't hurt, and makes things more
-	 * consistent with other extensions.
-	 */
-	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
-
-	/* allocate struct containing task tracker related shared state */
-	WorkerTasksSharedState =
-		(WorkerTasksSharedStateData *) ShmemInitStruct("Worker Task Control",
-													   sizeof(WorkerTasksSharedStateData),
-													   &alreadyInitialized);
-
-	if (!alreadyInitialized)
-	{
-#if (PG_VERSION_NUM >= 100000)
-		WorkerTasksSharedState->taskHashTrancheId = LWLockNewTrancheId();
-		WorkerTasksSharedState->taskHashTrancheName = "Worker Task Hash Tranche";
-		LWLockRegisterTranche(WorkerTasksSharedState->taskHashTrancheId,
-							  WorkerTasksSharedState->taskHashTrancheName);
-#else
-
-		/* initialize lwlock protecting the task tracker hash table */
-		LWLockTranche *tranche = &WorkerTasksSharedState->taskHashLockTranche;
-
-		WorkerTasksSharedState->taskHashTrancheId = LWLockNewTrancheId();
-		tranche->array_base = &WorkerTasksSharedState->taskHashLock;
-		tranche->array_stride = sizeof(LWLock);
-		tranche->name = "Worker Task Hash Tranche";
-		LWLockRegisterTranche(WorkerTasksSharedState->taskHashTrancheId, tranche);
-#endif
-
-		LWLockInitialize(&WorkerTasksSharedState->taskHashLock,
-						 WorkerTasksSharedState->taskHashTrancheId);
-	}
-
-	/*  allocate hash table */
-	WorkerTasksSharedState->taskHash =
-		ShmemInitHash("Worker Task Hash",
-					  initTableSize, maxTableSize,
-					  &info, hashFlags);
+	TaskTrackerHash = ShmemInitHash("Worker Task Hash", initTableSize, maxTableSize,
+									&info, hashFlags);
 
 	LWLockRelease(AddinShmemInitLock);
 
-	Assert(WorkerTasksSharedState->taskHash != NULL);
-	Assert(WorkerTasksSharedState->taskHashTrancheId != 0);
+	Assert(TaskTrackerLock != NULL);
+	Assert(TaskTrackerHash != NULL);
 
 	if (prev_shmem_startup_hook != NULL)
 	{
@@ -856,11 +822,11 @@ ManageWorkerTasksHash(HTAB *WorkerTasksHash)
 	WorkerTask *currentTask = NULL;
 
 	/* ask the scheduler if we have new tasks to schedule */
-	LWLockAcquire(&WorkerTasksSharedState->taskHashLock, LW_SHARED);
+	LWLockAcquire(TaskTrackerLock, LW_SHARED);
 	schedulableTaskList = SchedulableTaskList(WorkerTasksHash);
-	LWLockRelease(&WorkerTasksSharedState->taskHashLock);
+	LWLockRelease(TaskTrackerLock);
 
-	LWLockAcquire(&WorkerTasksSharedState->taskHashLock, LW_EXCLUSIVE);
+	LWLockAcquire(TaskTrackerLock, LW_EXCLUSIVE);
 
 	/* schedule new tasks if we have any */
 	if (schedulableTaskList != NIL)
@@ -890,7 +856,7 @@ ManageWorkerTasksHash(HTAB *WorkerTasksHash)
 		currentTask = (WorkerTask *) hash_seq_search(&status);
 	}
 
-	LWLockRelease(&WorkerTasksSharedState->taskHashLock);
+	LWLockRelease(TaskTrackerLock);
 }
 
 

@@ -95,26 +95,6 @@ typedef struct WorkerTask
 #define WORKER_TASK_AT(workerTasks, index) \
 	((WorkerTask *) (((char *) (workerTasks)) + (index) * WORKER_TASK_SIZE))
 
-/*
- * WorkerTasksControlData contains task tracker state shared between
- * processes.
- */
-typedef struct WorkerTasksSharedStateData
-{
-	/* Hash table shared by the task tracker and task tracker protocol functions */
-	HTAB *taskHash;
-
-	/* Lock protecting workerNodesHash */
-	int taskHashTrancheId;
-#if (PG_VERSION_NUM >= 100000)
-	char *taskHashTrancheName;
-#else
-	LWLockTranche taskHashLockTranche;
-#endif
-	LWLock taskHashLock;
-} WorkerTasksSharedStateData;
-
-
 /* Config variables managed via guc.c */
 extern int TaskTrackerDelay;
 extern int MaxTrackedTasksPerNode;
@@ -122,7 +102,8 @@ extern int MaxRunningTasksPerNode;
 extern int MaxTaskStringSize;
 
 /* State shared by the task tracker and task tracker protocol functions */
-extern WorkerTasksSharedStateData *WorkerTasksSharedState;
+extern LWLock *TaskTrackerLock;
+extern HTAB *TaskTrackerHash;
 
 /* Entry point */
 extern void TaskTrackerMain(Datum main_arg);
