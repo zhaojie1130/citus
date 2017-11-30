@@ -39,32 +39,6 @@
 
 
 /*
- * Shared memory data for all maintenance workers.
- */
-typedef struct MaintenanceDaemonControlData
-{
-	/*
-	 * Lock protecting the shared memory state.  This is to be taken when
-	 * looking up (shared mode) or inserting (exclusive mode) per-database
-	 * data in dbHash.
-	 */
-	int trancheId;
-#if (PG_VERSION_NUM >= 100000)
-	char *lockTrancheName;
-#else
-	LWLockTranche lockTranche;
-#endif
-	LWLock lock;
-
-	/*
-	 * Hash-table of workers, one entry for each database with citus
-	 * activated.
-	 */
-	HTAB *dbHash;
-} MaintenanceDaemonControlData;
-
-
-/*
  * Per database worker state.
  */
 typedef struct MaintenanceDaemonDBData
@@ -83,12 +57,15 @@ typedef struct MaintenanceDaemonDBData
 double DistributedDeadlockDetectionTimeoutFactor = 2.0;
 
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
-static MaintenanceDaemonControlData *MaintenanceDaemonControl = NULL;
+
+/* Links to shared memory state */
+static LWLock *MaintenanceDaemonLock = NULL;
+static HTAB *MaintenanceDaemonDbHash = NULL;
+
 
 static volatile sig_atomic_t got_SIGHUP = false;
 
 static void MaintenanceDaemonSigHupHandler(SIGNAL_ARGS);
-static size_t MaintenanceDaemonShmemSize(void);
 static void MaintenanceDaemonShmemInit(void);
 static void MaintenanceDaemonErrorContext(void *arg);
 static bool LockCitusExtension(void);
@@ -102,7 +79,8 @@ static bool LockCitusExtension(void);
 void
 InitializeMaintenanceDaemon(void)
 {
-	RequestAddinShmemSpace(MaintenanceDaemonShmemSize());
+	RequestAddinShmemSpace(sizeof(LWLock *));
+	RequestNamedLWLockTranche("Citus Maintenance Daemon", 1);
 
 	prev_shmem_startup_hook = shmem_startup_hook;
 	shmem_startup_hook = MaintenanceDaemonShmemInit;
@@ -121,9 +99,9 @@ InitializeMaintenanceDaemonBackend(void)
 	Oid extensionOwner = CitusExtensionOwner();
 	bool found;
 
-	LWLockAcquire(&MaintenanceDaemonControl->lock, LW_EXCLUSIVE);
+	LWLockAcquire(MaintenanceDaemonLock, LW_EXCLUSIVE);
 
-	dbData = (MaintenanceDaemonDBData *) hash_search(MaintenanceDaemonControl->dbHash,
+	dbData = (MaintenanceDaemonDBData *) hash_search(MaintenanceDaemonDbHash,
 													 &MyDatabaseId,
 													 HASH_ENTER_NULL, &found);
 
@@ -174,7 +152,7 @@ InitializeMaintenanceDaemonBackend(void)
 
 		dbData->daemonStarted = true;
 		dbData->workerPid = 0;
-		LWLockRelease(&MaintenanceDaemonControl->lock);
+		LWLockRelease(MaintenanceDaemonLock);
 
 		WaitForBackgroundWorkerStartup(handle, &pid);
 	}
@@ -194,7 +172,7 @@ InitializeMaintenanceDaemonBackend(void)
 				SetLatch(dbData->latch);
 			}
 		}
-		LWLockRelease(&MaintenanceDaemonControl->lock);
+		LWLockRelease(MaintenanceDaemonLock);
 	}
 }
 
@@ -214,10 +192,10 @@ CitusMaintenanceDaemonMain(Datum main_arg)
 	/*
 	 * Look up this worker's configuration.
 	 */
-	LWLockAcquire(&MaintenanceDaemonControl->lock, LW_SHARED);
+	LWLockAcquire(MaintenanceDaemonLock, LW_SHARED);
 
 	myDbData = (MaintenanceDaemonDBData *)
-			   hash_search(MaintenanceDaemonControl->dbHash, &databaseOid,
+			   hash_search(MaintenanceDaemonDbHash, &databaseOid,
 						   HASH_FIND, NULL);
 	if (!myDbData)
 	{
@@ -240,7 +218,7 @@ CitusMaintenanceDaemonMain(Datum main_arg)
 
 	myDbData->latch = MyLatch;
 
-	LWLockRelease(&MaintenanceDaemonControl->lock);
+	LWLockRelease(MaintenanceDaemonLock);
 
 	/*
 	 * Setup error context so log messages can be properly attributed. Some of
@@ -381,29 +359,6 @@ CitusMaintenanceDaemonMain(Datum main_arg)
 
 
 /*
- * MaintenanceDaemonShmemSize computes how much shared memory is required.
- */
-static size_t
-MaintenanceDaemonShmemSize(void)
-{
-	Size size = 0;
-	Size hashSize = 0;
-
-	size = add_size(size, sizeof(MaintenanceDaemonControlData));
-
-	/*
-	 * We request enough shared memory to have one hash-table entry for each
-	 * worker process. We couldn't start more anyway, so there's little point
-	 * in allocating more.
-	 */
-	hashSize = hash_estimate_size(max_worker_processes, sizeof(MaintenanceDaemonDBData));
-	size = add_size(size, hashSize);
-
-	return size;
-}
-
-
-/*
  * MaintenanceDaemonShmemInit initializes the requested shared memory for the
  * maintenance daemon.
  */
@@ -414,55 +369,32 @@ MaintenanceDaemonShmemInit(void)
 	HASHCTL hashInfo;
 	int hashFlags = 0;
 
-	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
-
-	MaintenanceDaemonControl =
-		(MaintenanceDaemonControlData *) ShmemInitStruct("Citus Maintenance Daemon",
-														 MaintenanceDaemonShmemSize(),
-														 &alreadyInitialized);
+	/* reset in case this is a restart within the postmaster */
+	MaintenanceDaemonLock = NULL;
+	MaintenanceDaemonDbHash = NULL;
 
 	/*
-	 * Might already be initialized on EXEC_BACKEND type platforms that call
-	 * shared library initialization functions in every backend.
+	 * Create or attach to the shared memory state, including hash table
 	 */
+	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
+
+	MaintenanceDaemonLock = ShmemInitStruct("Citus Maintenance Daemon", sizeof(LWLock *),
+											&alreadyInitialized);
+
 	if (!alreadyInitialized)
 	{
-#if (PG_VERSION_NUM >= 100000)
-		MaintenanceDaemonControl->trancheId = LWLockNewTrancheId();
-		MaintenanceDaemonControl->lockTrancheName = "Citus Maintenance Daemon";
-		LWLockRegisterTranche(MaintenanceDaemonControl->trancheId,
-							  MaintenanceDaemonControl->lockTrancheName);
-#else
-
-		/* initialize lwlock  */
-		LWLockTranche *tranche = &MaintenanceDaemonControl->lockTranche;
-
-		/* start by zeroing out all the memory */
-		memset(MaintenanceDaemonControl, 0, MaintenanceDaemonShmemSize());
-
-		/* initialize lock */
-		MaintenanceDaemonControl->trancheId = LWLockNewTrancheId();
-		tranche->array_base = &MaintenanceDaemonControl->lock;
-		tranche->array_stride = sizeof(LWLock);
-		tranche->name = "Citus Maintenance Daemon";
-		LWLockRegisterTranche(MaintenanceDaemonControl->trancheId, tranche);
-#endif
-
-		LWLockInitialize(&MaintenanceDaemonControl->lock,
-						 MaintenanceDaemonControl->trancheId);
+		MaintenanceDaemonLock = &(GetNamedLWLockTranche(
+									  "Citus Maintenance Daemon"))->lock;
 	}
-
 
 	memset(&hashInfo, 0, sizeof(hashInfo));
 	hashInfo.keysize = sizeof(Oid);
 	hashInfo.entrysize = sizeof(MaintenanceDaemonDBData);
 	hashInfo.hash = tag_hash;
 	hashFlags = (HASH_ELEM | HASH_FUNCTION);
-
-	MaintenanceDaemonControl->dbHash =
-		ShmemInitHash("Maintenance Database Hash",
-					  max_worker_processes, max_worker_processes,
-					  &hashInfo, hashFlags);
+	MaintenanceDaemonDbHash = ShmemInitHash("Maintenance Database Hash",
+											max_worker_processes, max_worker_processes,
+											&hashInfo, hashFlags);
 
 	LWLockRelease(AddinShmemInitLock);
 
@@ -549,16 +481,16 @@ StopMaintenanceDaemon(Oid databaseId)
 	MaintenanceDaemonDBData *dbData = NULL;
 	pid_t workerPid = 0;
 
-	LWLockAcquire(&MaintenanceDaemonControl->lock, LW_EXCLUSIVE);
+	LWLockAcquire(MaintenanceDaemonLock, LW_EXCLUSIVE);
 
-	dbData = (MaintenanceDaemonDBData *) hash_search(MaintenanceDaemonControl->dbHash,
+	dbData = (MaintenanceDaemonDBData *) hash_search(MaintenanceDaemonDbHash,
 													 &databaseId, HASH_REMOVE, &found);
 	if (found)
 	{
 		workerPid = dbData->workerPid;
 	}
 
-	LWLockRelease(&MaintenanceDaemonControl->lock);
+	LWLockRelease(MaintenanceDaemonLock);
 
 	if (workerPid > 0)
 	{

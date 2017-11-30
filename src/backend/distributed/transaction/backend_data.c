@@ -37,13 +37,7 @@
  */
 typedef struct BackendManagementShmemData
 {
-	int trancheId;
-#if (PG_VERSION_NUM >= 100000)
-	NamedLWLockTranche namedLockTranche;
-#else
-	LWLockTranche lockTranche;
-#endif
-	LWLock lock;
+	LWLock *lock;
 
 	/*
 	 * We prefer to use an atomic integer over sequences for two
@@ -296,8 +290,8 @@ get_all_active_transactions(PG_FUNCTION_ARGS)
 void
 InitializeBackendManagement(void)
 {
-	/* allocate shared memory */
 	RequestAddinShmemSpace(BackendManagementShmemSize());
+	RequestNamedLWLockTranche("Backend Management Tranche", 1);
 
 	prev_shmem_startup_hook = shmem_startup_hook;
 	shmem_startup_hook = BackendManagementShmemInit;
@@ -314,7 +308,12 @@ BackendManagementShmemInit(void)
 {
 	bool alreadyInitialized = false;
 
-	/* we may update the shmem, acquire lock exclusively */
+	/* reset in case this is a restart within the postmaster */
+	backendManagementShmemData = NULL;
+
+	/*
+	 * Create or attach to the shared memory state, including hash table
+	 */
 	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 
 	backendManagementShmemData =
@@ -326,38 +325,13 @@ BackendManagementShmemInit(void)
 	if (!alreadyInitialized)
 	{
 		int backendIndex = 0;
-		char *trancheName = "Backend Management Tranche";
-
-#if (PG_VERSION_NUM >= 100000)
-		NamedLWLockTranche *namedLockTranche =
-			&backendManagementShmemData->namedLockTranche;
-
-#else
-		LWLockTranche *lockTranche = &backendManagementShmemData->lockTranche;
-#endif
 
 		/* start by zeroing out all the memory */
 		memset(backendManagementShmemData, 0,
 			   BackendManagementShmemSize());
 
-#if (PG_VERSION_NUM >= 100000)
-		namedLockTranche->trancheId = LWLockNewTrancheId();
-
-		LWLockRegisterTranche(namedLockTranche->trancheId, trancheName);
-		LWLockInitialize(&backendManagementShmemData->lock,
-						 namedLockTranche->trancheId);
-#else
-		backendManagementShmemData->trancheId = LWLockNewTrancheId();
-
-		/* we only need a single lock */
-		lockTranche->array_base = &backendManagementShmemData->lock;
-		lockTranche->array_stride = sizeof(LWLock);
-		lockTranche->name = trancheName;
-
-		LWLockRegisterTranche(backendManagementShmemData->trancheId, lockTranche);
-		LWLockInitialize(&backendManagementShmemData->lock,
-						 backendManagementShmemData->trancheId);
-#endif
+		backendManagementShmemData->lock = &(GetNamedLWLockTranche(
+												 "Backend Management Tranche"))->lock;
 
 		/* start the distributed transaction ids from 1 */
 		pg_atomic_init_u64(&backendManagementShmemData->nextTransactionNumber, 1);
@@ -461,7 +435,7 @@ UnSetDistributedTransactionId(void)
 void
 LockBackendSharedMemory(LWLockMode lockMode)
 {
-	LWLockAcquire(&backendManagementShmemData->lock, lockMode);
+	LWLockAcquire(backendManagementShmemData->lock, lockMode);
 }
 
 
@@ -472,7 +446,7 @@ LockBackendSharedMemory(LWLockMode lockMode)
 void
 UnlockBackendSharedMemory(void)
 {
-	LWLockRelease(&backendManagementShmemData->lock);
+	LWLockRelease(backendManagementShmemData->lock);
 }
 
 
