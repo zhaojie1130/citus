@@ -80,6 +80,14 @@ typedef struct PlanPullPushContext
 	int level;
 } PlanPullPushContext;
 
+typedef struct QueryReplaceContext
+{
+	Query *inputQuery;
+	PlanPullPushContext *pullPushContext;
+	int rteIdentity;
+} QueryReplaceContext;
+
+
 
 /* local function forward declarations */
 static bool NeedsDistributedPlanningWalker(Node *node, void *context);
@@ -755,6 +763,22 @@ CreateDistributedSelectPlan(Query *originalQuery, Query *query, ParamListInfo bo
 }
 
 
+
+typedef struct RTEIdentityHashEntry
+{
+	int		rteIdentity;	/* hash key --- MUST BE FIRST */
+	List *colocatedRteIdentities;
+} RTEIdentityHashEntry;
+static Relids
+GetRelationIdentities(RelationRestrictionContext *relationRestrictionContext);
+
+static
+HTAB * ReplaceNonColocatedJoin(RelationRestrictionContext *relationRestrictionContext,
+							 JoinRestrictionContext *joinRestrictionContext, Query *query);
+
+static bool ReplaceQueryWalker(Node *node, void *context);
+static bool SubplanQueryContainsRTE(Query *query, PlanPullPushContext *pullPushContext, int rteIdentity);
+
 static DeferredErrorMessage *
 PlanPullPushSubqueries(Query *query, PlanPullPushContext *context)
 {
@@ -815,6 +839,72 @@ PlanPullPushSubqueries(Query *query, PlanPullPushContext *context)
 		else if (!ContainsUnionSubquery(query) && !RestrictionEquivalenceForPartitionKeys(
 					 filteredPlannerRestriction))
 		{
+
+			while (!ContainsUnionSubquery(query) && !RestrictionEquivalenceForPartitionKeys(
+							 filteredPlannerRestriction))
+						{
+				HTAB * htab = ReplaceNonColocatedJoin(filteredPlannerRestriction->relationRestrictionContext,
+						filteredPlannerRestriction->joinRestrictionContext, query);
+
+				RTEIdentityHashEntry *rteHashEntry = NULL;
+				HASH_SEQ_STATUS status;
+
+				int rteMin = -1;
+				int rteMinCount = -1;
+
+				hash_seq_init(&status, htab);
+
+				while ((rteHashEntry = hash_seq_search(&status)) != NULL)
+				{
+					ListCell *lc = NULL;
+
+					elog(DEBUG4, "RTE For Key: %d", rteHashEntry->rteIdentity);
+
+					if (rteMinCount == -1)
+					{
+						rteMinCount = list_length(rteHashEntry->colocatedRteIdentities);
+						rteMin = rteHashEntry->rteIdentity;
+					}
+
+
+					if (list_length(rteHashEntry->colocatedRteIdentities) < rteMinCount)
+					{
+						rteMinCount = list_length(rteHashEntry->colocatedRteIdentities);
+						rteMin = rteHashEntry->rteIdentity;
+					}
+
+					StringInfo str = makeStringInfo();
+
+					foreach(lc, rteHashEntry->colocatedRteIdentities)
+					{
+						int rteSecond = lfirst_int(lc);
+						appendStringInfo(str, "%d,", rteSecond);
+					}
+					elog(DEBUG4, "\n Colocated RTE For Key: %s", str->data);
+
+				}
+
+				elog(DEBUG4, "We've picked RTE %d", rteMin);
+
+
+					if (NeedsDistributedPlanning(query) && !ContainsReferencesToOuterQuery(query))
+						if (!SubplanQueryContainsRTE(query, context, rteMin))
+							return NULL;
+
+					filteredPlannerRestriction =
+								FilterPlannerRestrictionForQuery((*context).plannerRestrictionContext,
+																 query);
+				}
+
+			return NULL;
+
+			/*
+			 * Call QueryTreeWalker with the following check
+			 * 		if node == query && QueryContainsRTEIdentity(context->rteIdentiy)
+			 *
+			 */
+
+
 			List *queriesInWhere = NIL;
 			List *rangeTableEntries = query->rtable;
 			ListCell *rangeTableCell = NULL;
@@ -830,6 +920,8 @@ PlanPullPushSubqueries(Query *query, PlanPullPushContext *context)
 			foreach(queryCell, queriesInWhere)
 			{
 				Query *subquery = (Query *) lfirst(queryCell);
+
+				continue;
 
 				if (NeedsDistributedPlanning(subquery) && !ContainsReferencesToOuterQuery(
 						subquery))
@@ -849,6 +941,7 @@ PlanPullPushSubqueries(Query *query, PlanPullPushContext *context)
 			foreach(rangeTableCell, rangeTableEntries)
 			{
 				RangeTblEntry *rte = lfirst(rangeTableCell);
+				continue;
 
 				if (rte->rtekind == RTE_SUBQUERY && NeedsDistributedPlanning(
 						(Query *) rte->subquery) && !ContainsReferencesToOuterQuery(
@@ -866,6 +959,205 @@ PlanPullPushSubqueries(Query *query, PlanPullPushContext *context)
 	return NULL;
 }
 
+
+static bool
+SubplanQueryContainsRTE(Query *query, PlanPullPushContext *pullPushContext, int rteIdentity)
+{
+	QueryReplaceContext context = {
+		query, pullPushContext, rteIdentity
+	};
+
+	return query_tree_walker(query, ReplaceQueryWalker, &context, 0);
+}
+
+static bool
+ReplaceQueryWalker(Node *node, void *context)
+{
+	Query **inputQuery = &((QueryReplaceContext *) context)->inputQuery;
+	int rteIdentity =  ((QueryReplaceContext *) context)->rteIdentity;
+//elog(DEBUG4, "ReplaceQueryWalker is called");
+	if (node == NULL)
+	{
+		return false;
+	}
+
+	if (IsA(node, Query))
+	{
+		Query *query = (Query *) node;
+
+		if (query == *inputQuery)
+		{
+			elog(INFO, "Original query found while iterating");
+		}
+		else
+		{
+			Relids queryRteIdentities = QueryRteIdentities(query);
+
+			if (bms_is_member(rteIdentity, queryRteIdentities))
+			{
+				int subPlanId = list_length( ((QueryReplaceContext *) context)->pullPushContext->subPlanList);
+				PlannedStmt *subPlan = RecursivelyPlanQuery(query, subPlanId);
+				 ((QueryReplaceContext *) context)->pullPushContext->subPlanList =
+					lappend( ((QueryReplaceContext *) context)->pullPushContext->subPlanList, subPlan);
+
+				return true;
+			}
+		}
+	}
+
+	return expression_tree_walker(node, ReplaceQueryWalker, context);
+}
+
+
+
+/*
+ *
+  while query not safe to pushdown
+
+    find the RTEIdentities in the query
+    filter plannerRestriction with the query
+
+	for rte1 in rtes:
+		for rte2 in rtes:
+			if rt1 and rte2 DO HAVE Partition key equality :
+				all_rtes[rte1].append(rte2)
+
+	find the subquery that has the RTE with less common equality
+	recursively plan the query
+*/
+
+
+
+static
+HTAB * ReplaceNonColocatedJoin(RelationRestrictionContext *relationRestrictionContext,
+							 JoinRestrictionContext *joinRestrictionContext, Query *query)
+{
+	Relids relids = GetRelationIdentities(relationRestrictionContext);
+
+	Relids relidsSecond = bms_copy(relids);
+
+	//JoinRestriction *commonRestriction = CommonJoinRestriction(joinRestrictionContext->joinRestrictionList, relids);
+
+	int rteIdentity = -1;
+
+	HASHCTL info;
+	HTAB *itemSet = NULL;
+	int flags = HASH_ELEM | HASH_CONTEXT | HASH_BLOBS;
+
+	/* allocate sufficient capacity for O(1) expected look-up time */
+	int capacity = (int) (bms_num_members(relids)) + 1;
+
+	/* initialise the hash table for looking up keySize bytes */
+	memset(&info, 0, sizeof(info));
+	info.keysize = sizeof(int);
+	info.entrysize = sizeof(RTEIdentityHashEntry);
+	info.hcxt = CurrentMemoryContext;
+
+	itemSet = hash_create("ListToHashSet", capacity, &info, flags);
+
+
+	while ((rteIdentity = bms_next_member(relids, rteIdentity)) >= 0)
+	{
+		RTEIdentityHashEntry *hashEntryForRteIdentity = NULL;
+		int rteIdentitySecond = -1;
+		bool		found;
+
+		hashEntryForRteIdentity = (RTEIdentityHashEntry *) hash_search(itemSet,
+											   &(rteIdentity),
+											   HASH_ENTER,
+											   &found);
+
+		if (!found)
+			hashEntryForRteIdentity->colocatedRteIdentities = NIL;
+
+		while ((rteIdentitySecond = bms_next_member(relidsSecond, rteIdentitySecond)) >= 0)
+		{
+			Relids tmpRelids = NULL;
+			List *relationRestrictionAttributeEquivalenceList = NIL;
+			List *joinRestrictionAttributeEquivalenceList = NIL;
+			List *allAttributeEquivalenceList = NIL;
+
+			RelationRestrictionContext *restrictionContext = NULL;
+			JoinRestrictionContext *filtererdJoinRestrictionContext = NULL;
+
+			tmpRelids = bms_add_member(tmpRelids, rteIdentity);
+			tmpRelids = bms_add_member(tmpRelids, rteIdentitySecond);
+
+			restrictionContext = FilterRelationRestrictionContext(relationRestrictionContext, tmpRelids);
+			filtererdJoinRestrictionContext = FilterJoinRestrictionContext(joinRestrictionContext, tmpRelids);
+
+			relationRestrictionAttributeEquivalenceList =
+				GenerateAttributeEquivalencesForRelationRestrictions(restrictionContext);
+			joinRestrictionAttributeEquivalenceList =
+				GenerateAttributeEquivalencesForJoinRestrictions(joinRestrictionContext);
+
+			allAttributeEquivalenceList =
+				list_concat(relationRestrictionAttributeEquivalenceList,
+							joinRestrictionAttributeEquivalenceList);
+
+			if (EquivalenceListContainsRelationsEquality(allAttributeEquivalenceList, restrictionContext))
+			{
+				hashEntryForRteIdentity->colocatedRteIdentities = lappend_int(hashEntryForRteIdentity->colocatedRteIdentities, rteIdentitySecond);
+			}
+		}
+	}
+
+	return itemSet;
+
+}
+
+
+static Relids
+GetRelationIdentities(RelationRestrictionContext *relationRestrictionContext)
+{
+	ListCell *relationRestrictionCell = NULL;
+	Relids relids = NULL;
+
+	foreach(relationRestrictionCell, relationRestrictionContext->relationRestrictionList)
+	{
+		RelationRestriction *relationRestriction = lfirst(relationRestrictionCell);
+		RangeTblEntry *rte = relationRestriction->rte;
+
+		relids = bms_add_member(relids, GetRTEIdentity(rte));
+	}
+
+	return relids;
+}
+
+
+static JoinRestriction *
+CommonJoinRestriction(List *joinRestrictionList, Relids relids)
+{
+	ListCell *joinRestrictionCell = NULL;
+	JoinRestriction *commonRestriction = NULL;
+	int maxIntersected = 0;
+
+	foreach(joinRestrictionCell, joinRestrictionList)
+	{
+		JoinRestriction *joinRestriction =
+			(JoinRestriction *) lfirst(joinRestrictionCell);
+
+		PlannerInfo *plannerInfo = joinRestriction->plannerInfo;
+
+		Query *parse = plannerInfo->parse;
+
+		Relids queryRelids = QueryRteIdentities(parse);
+
+		Relids intersection = bms_intersect(relids, queryRelids);
+
+		if (bms_num_members(intersection) > maxIntersected)
+		{
+			commonRestriction = joinRestriction;
+
+			if (bms_num_members(intersection) == bms_num_members(relids))
+				break;
+		}
+	}
+
+	Assert (commonRestriction != NULL);
+
+	return commonRestriction;
+}
 
 static void
 RecursivelyPlanSetOperations(Query *query, Node *node,
@@ -1173,6 +1465,11 @@ RecursivelyPlanQuery(Query *query, int subPlanId)
 
 	resultQuery = BuildSubPlanResultQuery(query, subPlanId);
 
+	if (ContainsResultFunction((Node *) query))
+	{
+		cursorOptions |= CURSOR_OPT_FORCE_DISTRIBUTED;
+	}
+
 	if (log_min_messages >= DEBUG1)
 	{
 		StringInfo subqueryString = makeStringInfo();
@@ -1183,11 +1480,6 @@ RecursivelyPlanQuery(Query *query, int subPlanId)
 
 		elog(DEBUG1, "replacing subquery %s --> %s", subqueryString->data,
 			 resultQueryString->data);
-	}
-
-	if (ContainsResultFunction((Node *) query))
-	{
-		cursorOptions |= CURSOR_OPT_FORCE_DISTRIBUTED;
 	}
 
 	/* we want to be able to handle queries with only intermediate results */

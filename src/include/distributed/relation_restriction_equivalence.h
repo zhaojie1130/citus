@@ -24,4 +24,23 @@ extern bool SafeToPushdownUnionSubquery(
 extern List * RelationIdList(Query *query);
 
 
+/* TODO: move definitions to relation restriction */
+RelationRestrictionContext * FilterRelationRestrictionContext(
+	RelationRestrictionContext *relationRestrictionContext,
+	Relids
+	queryRteIdentities);
+JoinRestrictionContext * FilterJoinRestrictionContext(
+	JoinRestrictionContext *joinRestrictionContext, Relids
+	queryRteIdentities);
+List * GenerateAttributeEquivalencesForRelationRestrictions(
+	RelationRestrictionContext *restrictionContext);
+List * GenerateAttributeEquivalencesForJoinRestrictions(JoinRestrictionContext
+															   *joinRestrictionContext);
+
+bool EquivalenceListContainsRelationsEquality(List *attributeEquivalenceList,
+													 RelationRestrictionContext *
+													 restrictionContext);
+
+Relids QueryRteIdentities(Query *queryTree);
+
 #endif /* RELATION_RESTRICTION_EQUIVALENCE_H */

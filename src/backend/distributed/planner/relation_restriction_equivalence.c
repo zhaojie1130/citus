@@ -64,11 +64,6 @@ typedef struct AttributeEquivalenceClassMember
 
 static Var * FindTranslatedVar(List *appendRelList, Oid relationOid,
 							   Index relationRteIndex, Index *partitionKeyIndex);
-static bool EquivalenceListContainsRelationsEquality(List *attributeEquivalenceList,
-													 RelationRestrictionContext *
-													 restrictionContext);
-static List * GenerateAttributeEquivalencesForRelationRestrictions(
-	RelationRestrictionContext *restrictionContext);
 static AttributeEquivalenceClass * AttributeEquivalenceClassForEquivalenceClass(
 	EquivalenceClass *plannerEqClass, RelationRestriction *relationRestriction);
 static void AddToAttributeEquivalenceClass(AttributeEquivalenceClass **
@@ -99,8 +94,6 @@ static void AddRteRelationToAttributeEquivalenceClass(AttributeEquivalenceClass 
 													  Var *varToBeAdded);
 static Var * GetVarFromAssignedParam(List *parentPlannerParamList,
 									 Param *plannerParam);
-static List * GenerateAttributeEquivalencesForJoinRestrictions(JoinRestrictionContext
-															   *joinRestrictionContext);
 static bool AttributeClassContainsAttributeClassMember(AttributeEquivalenceClassMember *
 													   inputMember,
 													   AttributeEquivalenceClass *
@@ -467,7 +460,7 @@ ReferenceRelationCount(RelationRestrictionContext *restrictionContext)
  * whether all the relations exists in the common equivalence class.
  *
  */
-static bool
+bool
 EquivalenceListContainsRelationsEquality(List *attributeEquivalenceList,
 										 RelationRestrictionContext *restrictionContext)
 {
@@ -534,7 +527,7 @@ EquivalenceListContainsRelationsEquality(List *attributeEquivalenceList,
  *                 LATERAL vars given that we rely on that plannerInfo.
  *
  */
-static List *
+List *
 GenerateAttributeEquivalencesForRelationRestrictions(RelationRestrictionContext
 													 *restrictionContext)
 {
@@ -871,7 +864,7 @@ ListConcatUniqueAttributeClassMemberLists(AttributeEquivalenceClass **firstClass
  *         - Create an AttributeEquivalenceClass
  *         - Add both Var1 and Var2 to the AttributeEquivalenceClass
  */
-static List *
+List *
 GenerateAttributeEquivalencesForJoinRestrictions(JoinRestrictionContext *
 												 joinRestrictionContext)
 {
