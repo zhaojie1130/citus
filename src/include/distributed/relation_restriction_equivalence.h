@@ -35,11 +35,11 @@ JoinRestrictionContext * FilterJoinRestrictionContext(
 List * GenerateAttributeEquivalencesForRelationRestrictions(
 	RelationRestrictionContext *restrictionContext);
 List * GenerateAttributeEquivalencesForJoinRestrictions(JoinRestrictionContext
-															   *joinRestrictionContext);
+														*joinRestrictionContext);
 
 bool EquivalenceListContainsRelationsEquality(List *attributeEquivalenceList,
-													 RelationRestrictionContext *
-													 restrictionContext);
+											  RelationRestrictionContext *
+											  restrictionContext);
 
 Relids QueryRteIdentities(Query *queryTree);
 
