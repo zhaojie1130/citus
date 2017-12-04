@@ -771,10 +771,7 @@ static Relids GetRelationIdentities(
 	RelationRestrictionContext *relationRestrictionContext);
 
 static
-HTAB * ReplaceNonColocatedJoin(RelationRestrictionContext *relationRestrictionContext,
-							   JoinRestrictionContext *joinRestrictionContext,
-							   Query *query);
-
+bool ReplaceNonColocatedJoin(PlanPullPushContext *context, Query *query);
 static bool ReplaceQueryWalker(Node *node, void *context);
 static bool SubplanQueryContainsRTE(Query *query, PlanPullPushContext *pullPushContext,
 									int rteIdentity);
@@ -842,50 +839,37 @@ PlanPullPushSubqueries(Query *query, PlanPullPushContext *context)
 		}
 		else
 		{
-			while (!ContainsUnionSubquery(query) &&
-				   !RestrictionEquivalenceForPartitionKeys(filteredPlannerRestriction))
+			while ( /* !ContainsUnionSubquery(query) &&*/
+				     !RestrictionEquivalenceForPartitionKeys(filteredPlannerRestriction))
 			{
-				HTAB *htab = ReplaceNonColocatedJoin(
-					filteredPlannerRestriction->relationRestrictionContext,
-					filteredPlannerRestriction->
-					joinRestrictionContext, query);
 
-				RTEIdentityHashEntry *rteHashEntry = NULL;
-				HASH_SEQ_STATUS status;
-
-				int rteMin = -1;
-				int rteMinCount = -1;
-
-				hash_seq_init(&status, htab);
-
-				while ((rteHashEntry = hash_seq_search(&status)) != NULL)
+				if (log_min_messages >= DEBUG1)
 				{
-					if (rteMinCount == -1)
-					{
-						rteMinCount = list_length(rteHashEntry->colocatedRteIdentities);
-						rteMin = rteHashEntry->rteIdentity;
-					}
-
-
-					if (list_length(rteHashEntry->colocatedRteIdentities) < rteMinCount)
-					{
-						rteMinCount = list_length(rteHashEntry->colocatedRteIdentities);
-						rteMin = rteHashEntry->rteIdentity;
-					}
+					StringInfo subPlanString = makeStringInfo();
+					pg_get_query_def(query, subPlanString);
+					elog(DEBUG1, "Processing for query: %s", subPlanString->data);
 				}
 
-				if (NeedsDistributedPlanning(query) &&
-				   !ContainsReferencesToOuterQuery(query))
+				/* if couldn't replace any queries, return */
+				if (!ReplaceNonColocatedJoin(context, query))
 				{
-					if (!SubplanQueryContainsRTE(query, context, rteMin))
-					{
-						return NULL;
-					}
+
+					elog(DEBUG1, "Couldn't found anything to replace");
+
+
+					break;
+				}
+				else
+				{
+					elog(DEBUG1, "Replaced query");
+
 				}
 
 				filteredPlannerRestriction =
 					FilterPlannerRestrictionForQuery((*context).plannerRestrictionContext,
 													 query);
+
+				context->plannerRestrictionContext = filteredPlannerRestriction;
 			}
 		}
 	}
@@ -911,15 +895,17 @@ ReplaceQueryWalker(Node *node, void *context)
 {
 	Query **inputQuery = &((QueryReplaceContext *) context)->inputQuery;
 	int rteIdentity = ((QueryReplaceContext *) context)->rteIdentity;
-/* elog(DEBUG4, "ReplaceQueryWalker is called"); */
+
 	if (node == NULL)
 	{
 		return false;
 	}
 
+
 	if (IsA(node, Query))
 	{
 		Query *query = (Query *) node;
+		elog(INFO, "found a query: %d", rteIdentity);
 
 		if (query == *inputQuery)
 		{
@@ -938,7 +924,7 @@ ReplaceQueryWalker(Node *node, void *context)
 					lappend(
 						((QueryReplaceContext *) context)->pullPushContext->subPlanList,
 						subPlan);
-
+				elog(DEBUG1, "ReplaceQueryWalker RETRUNS TRUE");
 				return true;
 			}
 		}
@@ -966,96 +952,157 @@ ReplaceQueryWalker(Node *node, void *context)
 
 #include "utils/timestamp.h"
 
-
-static
-HTAB *
-ReplaceNonColocatedJoin(RelationRestrictionContext *relationRestrictionContext,
-						JoinRestrictionContext *joinRestrictionContext, Query *query)
-{
-	Relids relids = GetRelationIdentities(relationRestrictionContext);
-
-	Relids relidsSecond = bms_copy(relids);
-
-	/* JoinRestriction *commonRestriction = CommonJoinRestriction(joinRestrictionContext->joinRestrictionList, relids); */
-
-	int rteIdentity = -1;
-
-	HASHCTL info;
-	HTAB *itemSet = NULL;
-	int flags = HASH_ELEM | HASH_CONTEXT | HASH_BLOBS;
-
-	/* allocate sufficient capacity for O(1) expected look-up time */
-	int capacity = (int) (bms_num_members(relids)) + 1;
-
-	/* initialise the hash table for looking up keySize bytes */
-	memset(&info, 0, sizeof(info));
-	info.keysize = sizeof(int);
-	info.entrysize = sizeof(RTEIdentityHashEntry);
-	info.hcxt = CurrentMemoryContext;
-
-	itemSet = hash_create("ListToHashSet", capacity, &info, flags);
-
-	elog(DEBUG4, "Time Starts: %s", timestamptz_to_str(GetCurrentTimestamp()));
-
 /*
  * TODO: consider useing find_join_rel
  */
-	while ((rteIdentity = bms_next_member(relids, rteIdentity)) >= 0)
+
+static int
+FindMinRte(PlannerRestrictionContext *plannerRestrictionContext);
+
+/* if couldn't replace. return false */
+static bool
+ReplaceNonColocatedJoin(PlanPullPushContext *context, Query *query)
+{
+	int rteMin = FindMinRte(context->plannerRestrictionContext);
+
+	elog(INFO, "rteMin: %d", rteMin);
+	if (NeedsDistributedPlanning(query) &&
+		!ContainsReferencesToOuterQuery(query))
 	{
-		RTEIdentityHashEntry *hashEntryForRteIdentity = NULL;
-		int rteIdentitySecond = -1;
-		bool found;
+		elog(INFO, "Passed the first check");
 
-		hashEntryForRteIdentity = (RTEIdentityHashEntry *) hash_search(itemSet,
-																	   &(rteIdentity),
-																	   HASH_ENTER,
-																	   &found);
+		bool retVal = SubplanQueryContainsRTE(query, context, rteMin);
 
-		if (!found)
+
+		if (retVal)
 		{
-			hashEntryForRteIdentity->colocatedRteIdentities = NIL;
-		}
+			elog(DEBUG1, "SubplanQueryContainsRTE RETURN TRUE");
 
-		while ((rteIdentitySecond = bms_next_member(relidsSecond, rteIdentitySecond)) >=
-			   0)
-		{
-			Relids tmpRelids = NULL;
-			List *relationRestrictionAttributeEquivalenceList = NIL;
-			List *joinRestrictionAttributeEquivalenceList = NIL;
-			List *allAttributeEquivalenceList = NIL;
-
-			RelationRestrictionContext *restrictionContext = NULL;
-			JoinRestrictionContext *filtererdJoinRestrictionContext = NULL;
-
-			tmpRelids = bms_add_member(tmpRelids, rteIdentity);
-			tmpRelids = bms_add_member(tmpRelids, rteIdentitySecond);
-
-			restrictionContext = FilterRelationRestrictionContext(
-				relationRestrictionContext, tmpRelids);
-			filtererdJoinRestrictionContext = FilterJoinRestrictionContext(
-				joinRestrictionContext, tmpRelids);
-
-			relationRestrictionAttributeEquivalenceList =
-				GenerateAttributeEquivalencesForRelationRestrictions(restrictionContext);
-			joinRestrictionAttributeEquivalenceList =
-				GenerateAttributeEquivalencesForJoinRestrictions(joinRestrictionContext);
-
-			allAttributeEquivalenceList =
-				list_concat(relationRestrictionAttributeEquivalenceList,
-							joinRestrictionAttributeEquivalenceList);
-
-			if (EquivalenceListContainsRelationsEquality(allAttributeEquivalenceList,
-														 restrictionContext))
-			{
-				hashEntryForRteIdentity->colocatedRteIdentities = lappend_int(
-					hashEntryForRteIdentity->colocatedRteIdentities, rteIdentitySecond);
-			}
+			return true;
 		}
 	}
-	elog(DEBUG4, "Time Ends: %s", timestamptz_to_str(GetCurrentTimestamp()));
+	elog(DEBUG1, "SubplanQueryContainsRTE RETURN FALSE");
 
-	return itemSet;
+	return false;
 }
+
+
+static int
+FindMinRte(PlannerRestrictionContext *plannerRestrictionContext)
+{
+	RelationRestrictionContext *relationRestrictionContext =
+			plannerRestrictionContext->relationRestrictionContext;
+		JoinRestrictionContext *joinRestrictionContext =
+			plannerRestrictionContext->joinRestrictionContext;
+
+		Relids relids = NULL;
+		HTAB *htab = NULL;
+		Relids relidsSecond = NULL;
+		int rteIdentity = -1;
+
+		relids = GetRelationIdentities(relationRestrictionContext);
+		relidsSecond = bms_copy(relids);
+
+		HASHCTL info;
+		int flags = HASH_ELEM | HASH_CONTEXT | HASH_BLOBS;
+
+		int capacity = 0;
+		/* allocate sufficient capacity for O(1) expected look-up time */
+			capacity = (int) (bms_num_members(relids)) + 1;
+
+			/* initialise the hash table for looking up keySize bytes */
+			memset(&info, 0, sizeof(info));
+			info.keysize = sizeof(int);
+			info.entrysize = sizeof(RTEIdentityHashEntry);
+			info.hcxt = CurrentMemoryContext;
+
+			htab = hash_create("ListToHashSet", capacity, &info, flags);
+
+			elog(DEBUG4, "Time Starts: %s", timestamptz_to_str(GetCurrentTimestamp()));
+
+
+			while ((rteIdentity = bms_next_member(relids, rteIdentity)) >= 0)
+			{
+				RTEIdentityHashEntry *hashEntryForRteIdentity = NULL;
+				int rteIdentitySecond = -1;
+				bool found = false;
+
+				hashEntryForRteIdentity = (RTEIdentityHashEntry *) hash_search(htab,
+																			   &(rteIdentity),
+																			   HASH_ENTER,
+																			   &found);
+
+				if (!found)
+				{
+					hashEntryForRteIdentity->colocatedRteIdentities = NIL;
+				}
+
+				while ((rteIdentitySecond =
+					    bms_next_member(relidsSecond, rteIdentitySecond)) >= 0)
+				{
+					Relids tmpRelids = NULL;
+					List *relationRestrictionAttributeEquivalenceList = NIL;
+					List *joinRestrictionAttributeEquivalenceList = NIL;
+					List *allAttributeEquivalenceList = NIL;
+
+					RelationRestrictionContext *restrictionContext = NULL;
+					JoinRestrictionContext *filtererdJoinRestrictionContext = NULL;
+
+					tmpRelids = bms_add_member(tmpRelids, rteIdentity);
+					tmpRelids = bms_add_member(tmpRelids, rteIdentitySecond);
+
+					restrictionContext = FilterRelationRestrictionContext(
+						relationRestrictionContext, tmpRelids);
+					filtererdJoinRestrictionContext = FilterJoinRestrictionContext(
+						joinRestrictionContext, tmpRelids);
+
+					relationRestrictionAttributeEquivalenceList =
+						GenerateAttributeEquivalencesForRelationRestrictions(restrictionContext);
+					joinRestrictionAttributeEquivalenceList =
+						GenerateAttributeEquivalencesForJoinRestrictions(joinRestrictionContext);
+
+					allAttributeEquivalenceList =
+						list_concat(relationRestrictionAttributeEquivalenceList,
+									joinRestrictionAttributeEquivalenceList);
+
+					if (EquivalenceListContainsRelationsEquality(allAttributeEquivalenceList,
+																 restrictionContext))
+					{
+						hashEntryForRteIdentity->colocatedRteIdentities = lappend_int(
+							hashEntryForRteIdentity->colocatedRteIdentities, rteIdentitySecond);
+					}
+				}
+			}
+
+
+			RTEIdentityHashEntry *rteHashEntry = NULL;
+			HASH_SEQ_STATUS status;
+
+			int rteMin = -1;
+			int rteMinCount = -1;
+
+			hash_seq_init(&status, htab);
+
+			while ((rteHashEntry = hash_seq_search(&status)) != NULL)
+			{
+				if (rteMinCount == -1)
+				{
+					rteMinCount = list_length(rteHashEntry->colocatedRteIdentities);
+					rteMin = rteHashEntry->rteIdentity;
+				}
+
+
+				if (list_length(rteHashEntry->colocatedRteIdentities) < rteMinCount)
+				{
+					rteMinCount = list_length(rteHashEntry->colocatedRteIdentities);
+					rteMin = rteHashEntry->rteIdentity;
+				}
+			}
+
+			return rteMin;
+
+}
+
 
 
 static Relids
