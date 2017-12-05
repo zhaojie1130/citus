@@ -228,5 +228,13 @@ extern bool ExtractRangeTableEntryWalker(Node *node, List **rangeTableList);
 extern List * pull_var_clause_default(Node *node);
 extern bool OperatorImplementsEquality(Oid opno);
 
+/*TODO: move another file*/
+extern RelationRestrictionContext * FilterRelationRestrictionContext(
+	RelationRestrictionContext *relationRestrictionContext,
+	Relids
+	queryRteIdentities);
+extern JoinRestrictionContext * FilterJoinRestrictionContext(
+	JoinRestrictionContext *joinRestrictionContext, Relids
+	queryRteIdentities);
 
 #endif   /* MULTI_LOGICAL_PLANNER_H */

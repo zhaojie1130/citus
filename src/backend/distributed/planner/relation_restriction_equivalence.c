@@ -1491,3 +1491,282 @@ RelationIdList(Query *query)
 
 	return relationIdList;
 }
+
+
+typedef struct RTEIdentityHashEntry
+{
+	int rteIdentity;    /* hash key --- MUST BE FIRST */
+	List *colocatedRteIdentities;
+} RTEIdentityHashEntry;
+
+static bool TwoRTEsHaveRestrictionEquality(
+	PlannerRestrictionContext *plannerRestrictionContext,
+	int firstRTEIdentity,
+	int secondRTEIdentity);
+
+static int FindRTEWithLeastColocatedRTEs(HTAB *rteIdentityHash);
+static JoinRestrictionContext * RemoveDuplicateRestrictions(
+	JoinRestrictionContext *original);
+
+static bool SameRestrictionExists(JoinRestrictionContext *filteredContext,
+								  JoinRestriction *InputjoinRestriction);
+
+/*
+ * Given a plannerRestriction context, find the RTEIdentity which
+ * is joined with less number of RTE_RELATIONs.
+ */
+int
+FindRTEIdentityWithLeastColocatedJoins(PlannerRestrictionContext *
+									   plannerRestrictionContext)
+{
+	RelationRestrictionContext *relationRestrictionContext =
+		plannerRestrictionContext->relationRestrictionContext;
+	Relids relids = GetRTEIdentities(relationRestrictionContext);
+	Relids relidsSecond = bms_copy(relids);
+	int firstRteIdentity = -1;
+
+	HTAB *rteIdentityHash = NULL;
+	HASHCTL info;
+	int flags = HASH_ELEM | HASH_CONTEXT | HASH_BLOBS;
+	int capacity = 0;
+
+	/* allocate sufficient capacity for O(1) expected look-up time */
+	capacity = (int) (bms_num_members(relids)) + 1;
+
+	/* initialise the hash table for looking up keySize bytes */
+	memset(&info, 0, sizeof(info));
+	info.keysize = sizeof(int);
+	info.entrysize = sizeof(RTEIdentityHashEntry);
+	info.hcxt = CurrentMemoryContext;
+
+	rteIdentityHash = hash_create("RTEIdentityHash", capacity, &info, flags);
+
+	/* we have plenty of restrictions which gives the same restrictions, simply filter them */
+	plannerRestrictionContext->joinRestrictionContext =
+		RemoveDuplicateRestrictions(plannerRestrictionContext->joinRestrictionContext);
+
+
+	while ((firstRteIdentity = bms_next_member(relids, firstRteIdentity)) >= 0)
+	{
+		RTEIdentityHashEntry *hashEntryForRteIdentity = NULL;
+		int secondRTEIdentity = -1;
+		bool found = false;
+
+		hashEntryForRteIdentity = (RTEIdentityHashEntry *) hash_search(rteIdentityHash,
+																	   &(firstRteIdentity),
+																	   HASH_ENTER,
+																	   &found);
+
+		if (!found)
+		{
+			hashEntryForRteIdentity->colocatedRteIdentities = NIL;
+		}
+		else
+		{
+			/* we might have already marked two rtes colocated, skip expensive checks */
+			if (list_member_int(hashEntryForRteIdentity->colocatedRteIdentities,
+								secondRTEIdentity))
+			{
+				continue;
+			}
+			else if (firstRteIdentity == secondRTEIdentity)
+			{
+				continue;
+			}
+		}
+
+
+		/* iterate on the  */
+		while ((secondRTEIdentity =
+					bms_next_member(relidsSecond, secondRTEIdentity)) >= 0)
+		{
+			if (TwoRTEsHaveRestrictionEquality(plannerRestrictionContext,
+											   firstRteIdentity,
+											   secondRTEIdentity))
+			{
+				hashEntryForRteIdentity->colocatedRteIdentities = lappend_int(
+					hashEntryForRteIdentity->colocatedRteIdentities, secondRTEIdentity);
+			}
+		}
+	}
+
+	return FindRTEWithLeastColocatedRTEs(rteIdentityHash);
+}
+
+
+static int
+FindRTEWithLeastColocatedRTEs(HTAB *rteIdentityHash)
+{
+	RTEIdentityHashEntry *rteHashEntry = NULL;
+	HASH_SEQ_STATUS status;
+
+	int rteWithLeastColocation = 0;
+	int leastColocatedRTECount = INT_MAX;
+
+	hash_seq_init(&status, rteIdentityHash);
+
+	while ((rteHashEntry = hash_seq_search(&status)) != NULL)
+	{
+		if (list_length(rteHashEntry->colocatedRteIdentities) < leastColocatedRTECount)
+		{
+			leastColocatedRTECount = list_length(rteHashEntry->colocatedRteIdentities);
+			rteWithLeastColocation = rteHashEntry->rteIdentity;
+		}
+	}
+
+	Assert(rteWithLeastColocation > 0);
+
+	return rteWithLeastColocation;
+}
+
+
+static bool
+TwoRTEsHaveRestrictionEquality(PlannerRestrictionContext *plannerRestrictionContext,
+							   int firstRTEIdentity,
+							   int secondRTEIdentity)
+{
+	RelationRestrictionContext *relationRestrictionContext =
+		plannerRestrictionContext->relationRestrictionContext;
+	JoinRestrictionContext *joinRestrictionContext =
+		plannerRestrictionContext->joinRestrictionContext;
+
+
+	Relids tmpRelids = NULL;
+	List *relationRestrictionAttributeEquivalenceList = NIL;
+	List *joinRestrictionAttributeEquivalenceList = NIL;
+	List *allAttributeEquivalenceList = NIL;
+
+	RelationRestrictionContext *filteredRelationRestrictionContext = NULL;
+	JoinRestrictionContext *filtererdJoinRestrictionContext = NULL;
+
+	tmpRelids = bms_add_member(tmpRelids, firstRTEIdentity);
+	tmpRelids = bms_add_member(tmpRelids, secondRTEIdentity);
+
+	filteredRelationRestrictionContext =
+		FilterRelationRestrictionContext(relationRestrictionContext, tmpRelids);
+	filtererdJoinRestrictionContext =
+		FilterJoinRestrictionContext(joinRestrictionContext, tmpRelids);
+
+	relationRestrictionAttributeEquivalenceList =
+		GenerateAttributeEquivalencesForRelationRestrictions(
+			filteredRelationRestrictionContext);
+	joinRestrictionAttributeEquivalenceList =
+		GenerateAttributeEquivalencesForJoinRestrictions(filtererdJoinRestrictionContext);
+
+
+	allAttributeEquivalenceList =
+		list_concat(relationRestrictionAttributeEquivalenceList,
+					joinRestrictionAttributeEquivalenceList);
+
+	if (EquivalenceListContainsRelationsEquality(allAttributeEquivalenceList,
+												 filteredRelationRestrictionContext))
+	{
+		return true;
+	}
+
+	return false;
+}
+
+
+/*
+ * Skip the joins with the same restrictions
+ */
+static JoinRestrictionContext *
+RemoveDuplicateRestrictions(JoinRestrictionContext *originalContext)
+{
+	JoinRestrictionContext *filteredContext =
+		palloc0(sizeof(JoinRestrictionContext));
+	ListCell *lc = NULL;
+
+	filteredContext->joinRestrictionList = NIL;
+
+	foreach(lc, originalContext->joinRestrictionList)
+	{
+		JoinRestriction *joinRestriction = lfirst(lc);
+
+		/* if we already have the same restrictions, skip */
+		if (SameRestrictionExists(filteredContext, joinRestriction))
+		{
+			continue;
+		}
+
+		filteredContext->joinRestrictionList =
+			lappend(filteredContext->joinRestrictionList,
+					joinRestriction);
+	}
+
+	return filteredContext;
+}
+
+
+static bool
+SameRestrictionExists(JoinRestrictionContext *filteredContext,
+					  JoinRestriction *InputjoinRestriction)
+{
+	ListCell *lc = NULL;
+	foreach(lc, filteredContext->joinRestrictionList)
+	{
+		JoinRestriction *joinRestriction = lfirst(lc);
+
+		/* if we already have the same restrictions, skip */
+		if (list_difference(joinRestriction->joinRestrictInfoList,
+							InputjoinRestriction->joinRestrictInfoList) == NIL)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+
+/*
+ * Given a  RelationRestrictionContext, return a bms of RTEIdentities.
+ */
+Relids
+GetRTEIdentities(RelationRestrictionContext *relationRestrictionContext)
+{
+	ListCell *relationRestrictionCell = NULL;
+	Relids relids = NULL;
+
+	foreach(relationRestrictionCell, relationRestrictionContext->relationRestrictionList)
+	{
+		RelationRestriction *relationRestriction = lfirst(relationRestrictionCell);
+		RangeTblEntry *rte = relationRestriction->rte;
+
+		relids = bms_add_member(relids, GetRTEIdentity(rte));
+	}
+
+	return relids;
+}
+
+
+/*
+ * QueryRteIdentities gets a queryTree, find get all the rte identities assigned by
+ * us.
+ */
+Relids
+QueryRteIdentities(Query *queryTree)
+{
+	List *rangeTableList = NULL;
+	ListCell *rangeTableCell = NULL;
+	Relids queryRteIdentities = NULL;
+
+	/* extract range table entries for simple relations only */
+	ExtractRangeTableRelationWalker((Node *) queryTree, &rangeTableList);
+
+	foreach(rangeTableCell, rangeTableList)
+	{
+		RangeTblEntry *rangeTableEntry = (RangeTblEntry *) lfirst(rangeTableCell);
+		int rteIdentity = 0;
+
+		/* we're only interested in relations */
+		Assert(rangeTableEntry->rtekind == RTE_RELATION);
+
+		rteIdentity = GetRTEIdentity(rangeTableEntry);
+
+		queryRteIdentities = bms_add_member(queryRteIdentities, rteIdentity);
+	}
+
+	return queryRteIdentities;
+}

@@ -83,6 +83,12 @@ typedef struct PlanPullPushContext
 } PlanPullPushContext;
 
 
+typedef struct QueryReplaceViaRTEIdentityContext
+{
+	PlanPullPushContext *pullPushContext;
+	int rteIdentity;
+} QueryReplaceViaRTEIdentityContext;
+
 /* local function forward declarations */
 static bool NeedsDistributedPlanningWalker(Node *node, void *context);
 static PlannedStmt * CreateDistributedPlan(uint64 planId, PlannedStmt *localPlan,
@@ -115,7 +121,7 @@ static void RecursivelyPlanSetOperations(Query *query, Node *node,
 										 PlanPullPushContext *context);
 static bool IsDistributedTableRTE(Node *node);
 static bool PlanPullPushSubqueriesWalker(Node *node, PlanPullPushContext *context);
-static bool ShouldRecursivelyPlanSubquery(Query *query);
+static bool ShouldRecursivelyPlanSubquery(Query *query, PlanPullPushContext *context);
 static PlannedStmt * RecursivelyPlanQuery(Query *query, uint64 planId, int subPlanId);
 static bool ContainsReferencesToOuterQuery(Query *query);
 static bool ContainsReferencesToOuterQueryWalker(Node *node,
@@ -129,6 +135,14 @@ static PlannerRestrictionContext * CreateAndPushPlannerRestrictionContext(void);
 static PlannerRestrictionContext * CurrentPlannerRestrictionContext(void);
 static void PopPlannerRestrictionContext(void);
 static bool HasUnresolvedExternParamsWalker(Node *expression, ParamListInfo boundParams);
+
+
+/* functions for replacing non-colocated joins */
+static bool ReplaceNonColocatedJoin(PlanPullPushContext *context, Query *query);
+static bool ReplaceSubqueryViaRTEIdentity(Query *query,
+										  PlanPullPushContext *pullPushContext,
+										  int rteIdentity);
+static bool ReplaceSubqueryViaRTEIdentityWalker(Node *node, void *context);
 
 
 /* Distributed planner hook */
@@ -768,7 +782,6 @@ static DeferredErrorMessage *
 PlanPullPushSubqueries(Query *query, PlanPullPushContext *context)
 {
 	DeferredErrorMessage *error = NULL;
-	uint64 planId = context->planId;
 
 	if (SubqueryPushdown)
 	{
@@ -794,6 +807,7 @@ PlanPullPushSubqueries(Query *query, PlanPullPushContext *context)
 	/* descend into subqueries */
 	query_tree_walker(query, PlanPullPushSubqueriesWalker, context, 0);
 
+
 	if (query->setOperations != NULL)
 	{
 		SetOperationStmt *setOperations = (SetOperationStmt *) query->setOperations;
@@ -813,6 +827,7 @@ PlanPullPushSubqueries(Query *query, PlanPullPushContext *context)
 	}
 	else
 	{
+		/* We've moved the same logic to RecursivelyPlanSubqueries() as well */
 		PlannerRestrictionContext *filteredPlannerRestriction =
 			FilterPlannerRestrictionForQuery((*context).plannerRestrictionContext,
 											 query);
@@ -822,60 +837,114 @@ PlanPullPushSubqueries(Query *query, PlanPullPushContext *context)
 		{
 			/* let it be handled in the next call */
 		}
-		else if (!ContainsUnionSubquery(query) && !RestrictionEquivalenceForPartitionKeys(
-					 filteredPlannerRestriction))
+		else
 		{
-			List *queriesInWhere = NIL;
-			List *rangeTableEntries = query->rtable;
-			ListCell *rangeTableCell = NULL;
-
-			ListCell *queryCell = NULL;
-			query_tree_walker(query, PlanPullPushSubqueriesWalker, context, 0);
-
-			/*
-			 * We need to first replace the subqueries in WHERE clause since they
-			 * do not appear in the rtable list.
-			 */
-			ExtractQueryWalker(query->jointree->quals, &queriesInWhere);
-			foreach(queryCell, queriesInWhere)
+			/* handle non-colocated joins */
+			while (!ContainsUnionSubquery(query) &&
+				   !RestrictionEquivalenceForPartitionKeys(filteredPlannerRestriction))
 			{
-				Query *subquery = (Query *) lfirst(queryCell);
-
-				if (NeedsDistributedPlanning(subquery) && !ContainsReferencesToOuterQuery(
-						subquery))
+				/* if couldn't replace any queries, do not continue */
+				if (!ReplaceNonColocatedJoin(context, query))
 				{
-					int subPlanId = list_length(context->subPlanList);
-					PlannedStmt *subPlan = RecursivelyPlanQuery(subquery, planId,
-																subPlanId);
-
-					filteredPlannerRestriction =
-						FilterPlannerRestrictionForQuery(
-							(*context).plannerRestrictionContext,
-							query);
-
-					context->subPlanList = lappend(context->subPlanList, subPlan);
+					break;
 				}
-			}
 
-			foreach(rangeTableCell, rangeTableEntries)
-			{
-				RangeTblEntry *rte = lfirst(rangeTableCell);
-
-				if (rte->rtekind == RTE_SUBQUERY && NeedsDistributedPlanning(
-						(Query *) rte->subquery) && !ContainsReferencesToOuterQuery(
-						rte->subquery))
-				{
-					Query *subquery = rte->subquery;
-					int subPlanId = list_length(context->subPlanList);
-					PlannedStmt *subPlan = RecursivelyPlanQuery(subquery, planId,
-																subPlanId);
-					context->subPlanList = lappend(context->subPlanList, subPlan);
-				}
+				/*
+				 * We've replaced one of the non-colocated joins, now update
+				 * the fitered restrictions so that the replaced join doesn't
+				 * appear in the restrictions.
+				 */
+				filteredPlannerRestriction =
+					FilterPlannerRestrictionForQuery((*context).plannerRestrictionContext,
+													 query);
 			}
 		}
 	}
 
 	return NULL;
+}
+
+
+/*
+ * Pick the RTE_RELATION that has the less number of distribution key joins.
+ *
+ * Later, find the subquery that incules this RTE_RELATION, and plan that. If we
+ * can find and replace a join, we'd return true. Else, return false.
+ */
+static bool
+ReplaceNonColocatedJoin(PlanPullPushContext *context, Query *query)
+{
+
+	if (NeedsDistributedPlanning(query) &&
+		!ContainsReferencesToOuterQuery(query))
+	{
+		PlannerRestrictionContext *filteredPlannerRestriction =
+			FilterPlannerRestrictionForQuery(context->plannerRestrictionContext,
+											 query);
+		int rteMin = FindRTEIdentityWithLeastColocatedJoins(
+				filteredPlannerRestriction);
+
+		return ReplaceSubqueryViaRTEIdentity(query, context, rteMin);
+	}
+
+	return false;
+}
+
+
+static bool
+ReplaceSubqueryViaRTEIdentity(Query *query, PlanPullPushContext *pullPushContext,
+							  int rteIdentity)
+{
+	QueryReplaceViaRTEIdentityContext queryReplaceViaRTEIdentityContext = {
+		pullPushContext, rteIdentity
+	};
+
+	/*TODO: fix this hack. We want to run the ReplaceSubqueryViaRTEIdentityWalker on the query itself as well */
+	if (query_tree_walker(query, ReplaceSubqueryViaRTEIdentityWalker,
+						  &queryReplaceViaRTEIdentityContext, 0))
+	{
+		return true;
+	}
+
+	return false;
+}
+
+
+/*
+ * Walks over the given node to replace the query with the given RTE identity.
+ */
+static bool
+ReplaceSubqueryViaRTEIdentityWalker(Node *node, void *context)
+{
+	QueryReplaceViaRTEIdentityContext *replaceContext =
+		(QueryReplaceViaRTEIdentityContext *) context;
+	PlanPullPushContext *pullPushContext = replaceContext->pullPushContext;
+	int rteIdentity = replaceContext->rteIdentity;
+	uint64 planId = pullPushContext->planId;
+
+	if (node == NULL)
+	{
+		return false;
+	}
+
+	if (IsA(node, Query))
+	{
+		Query *query = (Query *) node;
+		Relids queryRteIdentities = QueryRteIdentities(query);
+
+		if (bms_is_member(rteIdentity, queryRteIdentities))
+		{
+			int subPlanId = list_length(pullPushContext->subPlanList);
+			PlannedStmt *subPlan = RecursivelyPlanQuery(query, planId, subPlanId);
+
+			pullPushContext->subPlanList = lappend(pullPushContext->subPlanList,
+												   subPlan);
+
+			return true;
+		}
+	}
+
+	return expression_tree_walker(node, ReplaceSubqueryViaRTEIdentityWalker, context);
 }
 
 
@@ -1157,12 +1226,41 @@ PlanPullPushSubqueriesWalker(Node *node, PlanPullPushContext *context)
 		PlanPullPushSubqueries(query, context);
 		context->level -= 1;
 
-		if (ShouldRecursivelyPlanSubquery(query))
+		if (ShouldRecursivelyPlanSubquery(query, context))
 		{
 			uint64 planId = context->planId;
 			int subPlanId = list_length(context->subPlanList);
+
 			PlannedStmt *subPlan = RecursivelyPlanQuery(query, planId, subPlanId);
 			context->subPlanList = lappend(context->subPlanList, subPlan);
+		}
+		else
+		{
+			PlannerRestrictionContext *filteredPlannerRestriction =
+				FilterPlannerRestrictionForQuery((*context).plannerRestrictionContext,
+												 query);
+
+			/*
+			 * We might still want to check whether the query contains colocated joins.
+			 * If not, replace the required ones here.
+			 */
+			if (!ContainsUnionSubquery(query) &&
+				   !RestrictionEquivalenceForPartitionKeys(filteredPlannerRestriction))
+			{
+				int rteMin = FindRTEIdentityWithLeastColocatedJoins(
+						filteredPlannerRestriction);
+
+				Relids queryRteIdentities = QueryRteIdentities(query);
+
+				if (bms_is_member(rteMin, queryRteIdentities))
+				{
+					int subPlanId = list_length(context->subPlanList);
+					PlannedStmt *subPlan = RecursivelyPlanQuery(query, context->planId, subPlanId);
+
+					context->subPlanList = lappend(context->subPlanList,
+														   subPlan);
+				}
+			}
 		}
 
 		return false;
@@ -1223,7 +1321,7 @@ RecursivelyPlanQuery(Query *query, uint64 planId, int subPlanId)
  *
  */
 static bool
-ShouldRecursivelyPlanSubquery(Query *query)
+ShouldRecursivelyPlanSubquery(Query *query, PlanPullPushContext *context)
 {
 	bool shouldRecursivelyPlan = false;
 	DeferredErrorMessage *pushdownError = NULL;
@@ -1255,6 +1353,26 @@ ShouldRecursivelyPlanSubquery(Query *query)
 		{
 			/* we could plan this subquery through re-partitioning */
 		}
+		else if (false)
+		{
+			/*
+			 * TODO: At this point, we should check one more thing:
+			 *
+			 * If we've replaced all FROM subqueries, we should somehome
+			 * recurse into the sublink. Example query:
+			 *
+			 * SELECT
+					foo.user_id
+				FROM
+					(SELECT users_table.user_id, event_type FROM users_table, events_table WHERE users_table.user_id = events_table.value_2 AND event_type IN (1,2,3,4)) as foo,
+					(SELECT users_table.user_id FROM users_table, events_table WHERE users_table.user_id = events_table.event_type AND event_type IN (5,6,7,8)) as bar
+				WHERE
+					foo.user_id = bar.user_id AND
+					foo.event_type IN (SELECT event_type FROM events_table WHERE user_id < 100);
+			 *
+			 *
+			 */
+		}
 		else
 		{
 			DeferredErrorMessage *unsupportedQueryError = NULL;
@@ -1265,6 +1383,19 @@ ShouldRecursivelyPlanSubquery(Query *query)
 				/* Citus can plan this distribute (sub)query */
 				shouldRecursivelyPlan = true;
 			}
+		}
+	}
+	else
+	{
+		PlannerRestrictionContext *filteredRestrictionContext =
+			FilterPlannerRestrictionForQuery(context->plannerRestrictionContext, query);
+
+		if (!ContainsUnionSubquery(query) &&
+			DeferErrorIfQueryNotSupported(query) == NULL &&
+			SubqueryEntryList(query) == NIL &&
+			!RestrictionEquivalenceForPartitionKeys(filteredRestrictionContext))
+		{
+			shouldRecursivelyPlan = true;
 		}
 	}
 

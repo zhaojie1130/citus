@@ -22,6 +22,9 @@ extern uint32 ReferenceRelationCount(RelationRestrictionContext *restrictionCont
 extern bool SafeToPushdownUnionSubquery(
 	PlannerRestrictionContext *plannerRestrictionContext);
 extern List * RelationIdList(Query *query);
-
+extern int FindRTEIdentityWithLeastColocatedJoins(PlannerRestrictionContext *
+												  plannerRestrictionContext);
+extern Relids QueryRteIdentities(Query *queryTree);
+extern Relids GetRTEIdentities(RelationRestrictionContext *relationRestrictionContext);
 
 #endif /* RELATION_RESTRICTION_EQUIVALENCE_H */
