@@ -839,7 +839,7 @@ PlanPullPushSubqueries(Query *query, PlanPullPushContext *context)
 		}
 		else
 		{
-			while ( /* !ContainsUnionSubquery(query) &&*/
+			while (  !ContainsUnionSubquery(query) &&
 				     !RestrictionEquivalenceForPartitionKeys(filteredPlannerRestriction))
 			{
 
@@ -855,8 +855,6 @@ PlanPullPushSubqueries(Query *query, PlanPullPushContext *context)
 				{
 
 					elog(DEBUG1, "Couldn't found anything to replace");
-
-
 					break;
 				}
 				else
@@ -973,19 +971,40 @@ ReplaceNonColocatedJoin(PlanPullPushContext *context, Query *query)
 
 		bool retVal = SubplanQueryContainsRTE(query, context, rteMin);
 
-
 		if (retVal)
 		{
-			elog(DEBUG1, "SubplanQueryContainsRTE RETURN TRUE");
-
 			return true;
 		}
 	}
-	elog(DEBUG1, "SubplanQueryContainsRTE RETURN FALSE");
 
 	return false;
 }
 
+static JoinRestrictionContext *
+RemoveDuplicateRestrictions(JoinRestrictionContext *original);
+
+static JoinRestrictionContext *
+RemoveDuplicateRestrictions(JoinRestrictionContext *original)
+{
+	JoinRestrictionContext *filteredContext =
+		palloc0(sizeof(JoinRestrictionContext));
+	ListCell *lc = NULL;
+
+	filteredContext->joinRestrictionList = NIL;
+
+	foreach(lc, original->joinRestrictionList)
+	{
+		JoinRestriction *j = lfirst(lc);
+
+		if (list_member(filteredContext->joinRestrictionList, j->joinRestrictInfoList))
+			continue;
+
+
+		filteredContext->joinRestrictionList = lappend( filteredContext->joinRestrictionList, j->joinRestrictInfoList);
+	}
+
+	return filteredContext;
+}
 
 static int
 FindMinRte(PlannerRestrictionContext *plannerRestrictionContext)
@@ -995,10 +1014,15 @@ FindMinRte(PlannerRestrictionContext *plannerRestrictionContext)
 		JoinRestrictionContext *joinRestrictionContext =
 			plannerRestrictionContext->joinRestrictionContext;
 
+		joinRestrictionContext = RemoveDuplicateRestrictions(joinRestrictionContext);
+
+elog(INFO, "Join count: %d", list_length(joinRestrictionContext->joinRestrictionList));
 		Relids relids = NULL;
 		HTAB *htab = NULL;
 		Relids relidsSecond = NULL;
 		int rteIdentity = -1;
+
+		int counter = 0;
 
 		relids = GetRelationIdentities(relationRestrictionContext);
 		relidsSecond = bms_copy(relids);
@@ -1018,7 +1042,7 @@ FindMinRte(PlannerRestrictionContext *plannerRestrictionContext)
 
 			htab = hash_create("ListToHashSet", capacity, &info, flags);
 
-			elog(DEBUG4, "Time Starts: %s", timestamptz_to_str(GetCurrentTimestamp()));
+			elog(DEBUG1, "Time Starts: %s", timestamptz_to_str(GetCurrentTimestamp()));
 
 
 			while ((rteIdentity = bms_next_member(relids, rteIdentity)) >= 0)
@@ -1036,6 +1060,13 @@ FindMinRte(PlannerRestrictionContext *plannerRestrictionContext)
 				{
 					hashEntryForRteIdentity->colocatedRteIdentities = NIL;
 				}
+				else
+				{
+					if (list_member_int(hashEntryForRteIdentity->colocatedRteIdentities, rteIdentitySecond))
+					{
+						continue;
+					}
+				}
 
 				while ((rteIdentitySecond =
 					    bms_next_member(relidsSecond, rteIdentitySecond)) >= 0)
@@ -1048,22 +1079,29 @@ FindMinRte(PlannerRestrictionContext *plannerRestrictionContext)
 					RelationRestrictionContext *restrictionContext = NULL;
 					JoinRestrictionContext *filtererdJoinRestrictionContext = NULL;
 
+
 					tmpRelids = bms_add_member(tmpRelids, rteIdentity);
 					tmpRelids = bms_add_member(tmpRelids, rteIdentitySecond);
 
 					restrictionContext = FilterRelationRestrictionContext(
 						relationRestrictionContext, tmpRelids);
-					filtererdJoinRestrictionContext = FilterJoinRestrictionContext(
-						joinRestrictionContext, tmpRelids);
+					//filtererdJoinRestrictionContext = FilterJoinRestrictionContext(
+						//joinRestrictionContext, tmpRelids);
 
 					relationRestrictionAttributeEquivalenceList =
 						GenerateAttributeEquivalencesForRelationRestrictions(restrictionContext);
 					joinRestrictionAttributeEquivalenceList =
 						GenerateAttributeEquivalencesForJoinRestrictions(joinRestrictionContext);
 
+					elog(INFO, "Filtered Join count: %d", list_length(joinRestrictionContext->joinRestrictionList));
+					elog(INFO, "Filtered rel count: %d", list_length(restrictionContext->relationRestrictionList));
+
+
 					allAttributeEquivalenceList =
 						list_concat(relationRestrictionAttributeEquivalenceList,
 									joinRestrictionAttributeEquivalenceList);
+					++counter;
+					elog(DEBUG1, "Time Starts3: %s", timestamptz_to_str(GetCurrentTimestamp()));
 
 					if (EquivalenceListContainsRelationsEquality(allAttributeEquivalenceList,
 																 restrictionContext))
@@ -1071,9 +1109,15 @@ FindMinRte(PlannerRestrictionContext *plannerRestrictionContext)
 						hashEntryForRteIdentity->colocatedRteIdentities = lappend_int(
 							hashEntryForRteIdentity->colocatedRteIdentities, rteIdentitySecond);
 					}
+					elog(DEBUG1, "Time Ends3: %s", timestamptz_to_str(GetCurrentTimestamp()));
+
 				}
 			}
 
+
+			elog(DEBUG1, "Time Ends: %s with %d counts", timestamptz_to_str(GetCurrentTimestamp()), counter);
+
+			elog(DEBUG1, "Time Start2: %s", timestamptz_to_str(GetCurrentTimestamp()));
 
 			RTEIdentityHashEntry *rteHashEntry = NULL;
 			HASH_SEQ_STATUS status;
@@ -1098,6 +1142,7 @@ FindMinRte(PlannerRestrictionContext *plannerRestrictionContext)
 					rteMin = rteHashEntry->rteIdentity;
 				}
 			}
+			elog(DEBUG1, "Time Ends: %s", timestamptz_to_str(GetCurrentTimestamp()));
 
 			return rteMin;
 
