@@ -80,17 +80,9 @@ typedef MultiNode *(*RuleApplyFunction) (MultiNode *leftNode, MultiNode *rightNo
 static RuleApplyFunction RuleApplyFunctionArray[JOIN_RULE_LAST] = { 0 }; /* join rules */
 
 /* Local functions forward declarations */
-static RelationRestrictionContext * FilterRelationRestrictionContext(
-	RelationRestrictionContext *relationRestrictionContext,
-	Relids
-	queryRteIdentities);
-static JoinRestrictionContext * FilterJoinRestrictionContext(
-	JoinRestrictionContext *joinRestrictionContext, Relids
-	queryRteIdentities);
 static bool RangeTableArrayContainsAnyRTEIdentities(RangeTblEntry **rangeTableEntries, int
 													rangeTableArrayLength, Relids
 													queryRteIdentities);
-static Relids QueryRteIdentities(Query *queryTree);
 
 static DeferredErrorMessage * DeferErrorIfUnsupportedSublinkAndReferenceTable(
 	Query *queryTree);
@@ -759,7 +751,7 @@ FilterPlannerRestrictionForQuery(PlannerRestrictionContext *plannerRestrictionCo
  * in the queryRteIdentities and returns a newly allocated
  * RelationRestrictionContext.
  */
-static RelationRestrictionContext *
+RelationRestrictionContext *
 FilterRelationRestrictionContext(RelationRestrictionContext *relationRestrictionContext,
 								 Relids queryRteIdentities)
 {
@@ -796,7 +788,7 @@ FilterRelationRestrictionContext(RelationRestrictionContext *relationRestriction
  * Note that the join restriction is added to the return context as soon as
  * any range table entry that appear in the join belongs to queryRteIdentities.
  */
-static JoinRestrictionContext *
+JoinRestrictionContext *
 FilterJoinRestrictionContext(JoinRestrictionContext *joinRestrictionContext, Relids
 							 queryRteIdentities)
 {
@@ -868,37 +860,6 @@ RangeTableArrayContainsAnyRTEIdentities(RangeTblEntry **rangeTableEntries, int
 	}
 
 	return false;
-}
-
-
-/*
- * QueryRteIdentities gets a queryTree, find get all the rte identities assigned by
- * us.
- */
-static Relids
-QueryRteIdentities(Query *queryTree)
-{
-	List *rangeTableList = NULL;
-	ListCell *rangeTableCell = NULL;
-	Relids queryRteIdentities = NULL;
-
-	/* extract range table entries for simple relations only */
-	ExtractRangeTableRelationWalker((Node *) queryTree, &rangeTableList);
-
-	foreach(rangeTableCell, rangeTableList)
-	{
-		RangeTblEntry *rangeTableEntry = (RangeTblEntry *) lfirst(rangeTableCell);
-		int rteIdentity = 0;
-
-		/* we're only interested in relations */
-		Assert(rangeTableEntry->rtekind == RTE_RELATION);
-
-		rteIdentity = GetRTEIdentity(rangeTableEntry);
-
-		queryRteIdentities = bms_add_member(queryRteIdentities, rteIdentity);
-	}
-
-	return queryRteIdentities;
 }
 
 
