@@ -782,7 +782,6 @@ static DeferredErrorMessage *
 PlanPullPushSubqueries(Query *query, PlanPullPushContext *context)
 {
 	DeferredErrorMessage *error = NULL;
-	uint64 planId = context->planId;
 
 	if (SubqueryPushdown)
 	{
@@ -858,8 +857,6 @@ PlanPullPushSubqueries(Query *query, PlanPullPushContext *context)
 				filteredPlannerRestriction =
 					FilterPlannerRestrictionForQuery((*context).plannerRestrictionContext,
 													 query);
-
-				context->plannerRestrictionContext = filteredPlannerRestriction;
 			}
 		}
 	}
@@ -877,12 +874,16 @@ PlanPullPushSubqueries(Query *query, PlanPullPushContext *context)
 static bool
 ReplaceNonColocatedJoin(PlanPullPushContext *context, Query *query)
 {
-	int rteMin = FindRTEIdentityWithLeastColocatedJoins(
-		context->plannerRestrictionContext);
 
 	if (NeedsDistributedPlanning(query) &&
 		!ContainsReferencesToOuterQuery(query))
 	{
+		PlannerRestrictionContext *filteredPlannerRestriction =
+			FilterPlannerRestrictionForQuery(context->plannerRestrictionContext,
+											 query);
+		int rteMin = FindRTEIdentityWithLeastColocatedJoins(
+				filteredPlannerRestriction);
+
 		return ReplaceSubqueryViaRTEIdentity(query, context, rteMin);
 	}
 
@@ -1243,31 +1244,22 @@ PlanPullPushSubqueriesWalker(Node *node, PlanPullPushContext *context)
 			 * We might still want to check whether the query contains colocated joins.
 			 * If not, replace the required ones here.
 			 */
-			while (!ContainsUnionSubquery(query) &&
+			if (!ContainsUnionSubquery(query) &&
 				   !RestrictionEquivalenceForPartitionKeys(filteredPlannerRestriction))
 			{
-				if (log_min_messages >= DEBUG1)
+				int rteMin = FindRTEIdentityWithLeastColocatedJoins(
+						filteredPlannerRestriction);
+
+				Relids queryRteIdentities = QueryRteIdentities(query);
+
+				if (bms_is_member(rteMin, queryRteIdentities))
 				{
-					StringInfo subqueryString = makeStringInfo();
+					int subPlanId = list_length(context->subPlanList);
+					PlannedStmt *subPlan = RecursivelyPlanQuery(query, context->planId, subPlanId);
 
-					pg_get_query_def(query, subqueryString);
+					context->subPlanList = lappend(context->subPlanList,
+														   subPlan);
 				}
-
-
-				/* if couldn't replace any queries, do not continue */
-				if (!ReplaceNonColocatedJoin(context, query))
-				{
-					break;
-				}
-
-				/*
-				 * We've replaced one of the non-colocated joins, now update
-				 * the fitered restrictions so that the replaced join doesn't
-				 * appear in the restrictions.
-				 */
-				filteredPlannerRestriction =
-					FilterPlannerRestrictionForQuery((*context).plannerRestrictionContext,
-													 query);
 			}
 		}
 
@@ -1361,6 +1353,26 @@ ShouldRecursivelyPlanSubquery(Query *query, PlanPullPushContext *context)
 		{
 			/* we could plan this subquery through re-partitioning */
 		}
+		else if (false)
+		{
+			/*
+			 * TODO: At this point, we should check one more thing:
+			 *
+			 * If we've replaced all FROM subqueries, we should somehome
+			 * recurse into the sublink. Example query:
+			 *
+			 * SELECT
+					foo.user_id
+				FROM
+					(SELECT users_table.user_id, event_type FROM users_table, events_table WHERE users_table.user_id = events_table.value_2 AND event_type IN (1,2,3,4)) as foo,
+					(SELECT users_table.user_id FROM users_table, events_table WHERE users_table.user_id = events_table.event_type AND event_type IN (5,6,7,8)) as bar
+				WHERE
+					foo.user_id = bar.user_id AND
+					foo.event_type IN (SELECT event_type FROM events_table WHERE user_id < 100);
+			 *
+			 *
+			 */
+		}
 		else
 		{
 			DeferredErrorMessage *unsupportedQueryError = NULL;
@@ -1371,6 +1383,19 @@ ShouldRecursivelyPlanSubquery(Query *query, PlanPullPushContext *context)
 				/* Citus can plan this distribute (sub)query */
 				shouldRecursivelyPlan = true;
 			}
+		}
+	}
+	else
+	{
+		PlannerRestrictionContext *filteredRestrictionContext =
+			FilterPlannerRestrictionForQuery(context->plannerRestrictionContext, query);
+
+		if (!ContainsUnionSubquery(query) &&
+			DeferErrorIfQueryNotSupported(query) == NULL &&
+			SubqueryEntryList(query) == NIL &&
+			!RestrictionEquivalenceForPartitionKeys(filteredRestrictionContext))
+		{
+			shouldRecursivelyPlan = true;
 		}
 	}
 
