@@ -119,6 +119,10 @@ static DeferredErrorMessage * PlanPullPushSubqueries(Query *query,
 													 PlanPullPushContext *context);
 static void RecursivelyPlanSetOperations(Query *query, Node *node,
 										 PlanPullPushContext *context);
+static void RecursivelyPlanRecurringOuterJoins(Query *query, Node *node,
+											   PlanPullPushContext *context);
+static bool QueryContainsDistributedTableRTE(Query *query);
+static bool JoinTreeContainsDistributedTableRTE(Query *query, Node *node);
 static bool IsDistributedTableRTE(Node *node);
 static bool PlanPullPushSubqueriesWalker(Node *node, PlanPullPushContext *context);
 static bool ShouldRecursivelyPlanSubquery(Query *query, PlanPullPushContext *context);
@@ -861,6 +865,17 @@ PlanPullPushSubqueries(Query *query, PlanPullPushContext *context)
 		}
 	}
 
+	{
+		FromExpr *fromExpr = query->jointree;
+		ListCell *joinTreeNodeCell = NULL;
+
+		foreach(joinTreeNodeCell, fromExpr->fromlist)
+		{
+			Node *joinTreeNode = (Node *) lfirst(joinTreeNodeCell);
+			RecursivelyPlanRecurringOuterJoins(query, joinTreeNode, context);
+		}
+	}
+
 	return NULL;
 }
 
@@ -966,7 +981,7 @@ RecursivelyPlanSetOperations(Query *query, Node *node,
 												  query->rtable);
 
 		if (rangeTableEntry->rtekind == RTE_SUBQUERY &&
-			FindNodeCheck((Node *) rangeTableEntry->subquery, IsDistributedTableRTE))
+			QueryContainsDistributedTableRTE(rangeTableEntry->subquery))
 		{
 			Query *subquery = rangeTableEntry->subquery;
 			uint64 planId = context->planId;
@@ -975,6 +990,214 @@ RecursivelyPlanSetOperations(Query *query, Node *node,
 			context->subPlanList = lappend(context->subPlanList, subPlan);
 		}
 	}
+}
+
+
+/*
+ * RecursivelyPlanJoinTree recursively plans all subqueries that contain
+ * a distributed table RTE in a join tree. This is used to recursively
+ * plan all leafs on the inner side of an outer join when the outer side
+ * does not contain any distributed tables.
+ *
+ * This function currently plans each leaf node individually. A smarter
+ * approach would be to wrap part of the join tree in a new subquery and
+ * plan that recursively.
+ */
+static void
+RecursivelyPlanJoinTree(Query *query, Node *joinTreeNode,
+						PlanPullPushContext *context)
+{
+	if (IsA(joinTreeNode, JoinExpr))
+	{
+		JoinExpr *joinExpr = (JoinExpr *) joinTreeNode;
+
+		RecursivelyPlanJoinTree(query, joinExpr->rarg, context);
+		RecursivelyPlanJoinTree(query, joinExpr->larg, context);
+	}
+	else if (IsA(joinTreeNode, RangeTblRef))
+	{
+		RangeTblRef *rangeTableRef = (RangeTblRef *) joinTreeNode;
+		RangeTblEntry *rangeTableEntry = rt_fetch(rangeTableRef->rtindex,
+												  query->rtable);
+
+		if (rangeTableEntry->rtekind == RTE_SUBQUERY &&
+			QueryContainsDistributedTableRTE(rangeTableEntry->subquery))
+		{
+			Query *subquery = rangeTableEntry->subquery;
+			uint64 planId = context->planId;
+			int subPlanId = list_length(context->subPlanList);
+			PlannedStmt *subPlan = RecursivelyPlanQuery(subquery, planId, subPlanId);
+			context->subPlanList = lappend(context->subPlanList, subPlan);
+		}
+	}
+}
+
+
+/*
+ * RecursivelyPlanRecurringOuterJoins looks for outer joins in the join tree
+ * and if the outer side of the outer join does not contain a distributed
+ * table RTE (meaning the same set of tuples recurs when joining with a shard),
+ * while the inner side does, then the inner side is planned recursively.
+ */
+static void
+RecursivelyPlanRecurringOuterJoins(Query *query, Node *joinTreeNode,
+								   PlanPullPushContext *context)
+{
+	JoinExpr *joinExpr = NULL;
+	JoinType joinType = JOIN_INNER;
+	bool leftRecurs = false;
+	bool rightRecurs = false;
+
+	if (!IsA(joinTreeNode, JoinExpr))
+	{
+		/* nothing to do at leaf nodes */
+		return;
+	}
+
+	joinExpr = (JoinExpr *) joinTreeNode;
+	leftRecurs = !JoinTreeContainsDistributedTableRTE(query, joinExpr->larg);
+	rightRecurs = !JoinTreeContainsDistributedTableRTE(query, joinExpr->rarg);
+	joinType = joinExpr->jointype;
+
+	switch (joinType)
+	{
+		case JOIN_LEFT:
+		{
+			/* recurse into right side if only left side is recurring */
+			if (leftRecurs && !rightRecurs)
+			{
+				RecursivelyPlanJoinTree(query, joinExpr->rarg, context);
+
+				rightRecurs = true;
+			}
+
+			break;
+		}
+
+		case JOIN_RIGHT:
+		{
+			/* recurse into left side if only right side is recurring */
+			if (!leftRecurs && rightRecurs)
+			{
+				RecursivelyPlanJoinTree(query, joinExpr->larg, context);
+
+				leftRecurs = true;
+			}
+
+			break;
+		}
+
+		case JOIN_FULL:
+		{
+			/* recurse into right side if only left side is recurring */
+			if (leftRecurs && !rightRecurs)
+			{
+				RecursivelyPlanJoinTree(query, joinExpr->rarg, context);
+
+				rightRecurs = true;
+			}
+
+			/* recurse into left side if only right side is recurring */
+			if (!leftRecurs && rightRecurs)
+			{
+				RecursivelyPlanJoinTree(query, joinExpr->rarg, context);
+
+				leftRecurs = true;
+			}
+
+			break;
+		}
+
+		default:
+		case JOIN_INNER:
+		{
+			/* inner joins with recurring tuples can be safely executed */
+			break;
+		}
+	}
+
+	if (leftRecurs && rightRecurs)
+	{
+		/* both sides are already recurring, no need to continue */
+		return;
+	}
+
+	/* prevent recurring outer joins further down the join tree */
+	RecursivelyPlanRecurringOuterJoins(query, joinExpr->larg, context);
+	RecursivelyPlanRecurringOuterJoins(query, joinExpr->rarg, context);
+}
+
+
+/*
+ * JoinTreeContainsDistributedTableRTE returns whether a distributed table RTE
+ * appears in the join tree of a query. This is used to determine whether the
+ * inner side of an outer join should be recursively planned.
+ */
+static bool
+JoinTreeContainsDistributedTableRTE(Query *query, Node *joinTreeNode)
+{
+	if (joinTreeNode == NULL)
+	{
+		return false;
+	}
+
+	if (IsA(joinTreeNode, JoinExpr))
+	{
+		JoinExpr *joinExpr = (JoinExpr *) joinTreeNode;
+
+		if (JoinTreeContainsDistributedTableRTE(query, joinExpr->larg))
+		{
+			return true;
+		}
+
+		if (JoinTreeContainsDistributedTableRTE(query, joinExpr->rarg))
+		{
+			return true;
+		}
+	}
+	else if (IsA(joinTreeNode, RangeTblRef))
+	{
+		RangeTblRef *rangeTableRef = (RangeTblRef *) joinTreeNode;
+		RangeTblEntry *rangeTableEntry = rt_fetch(rangeTableRef->rtindex, query->rtable);
+
+		if (IsDistributedTableRTE((Node *) rangeTableEntry))
+		{
+			return true;
+		}
+
+		if (rangeTableEntry->rtekind == RTE_SUBQUERY &&
+			QueryContainsDistributedTableRTE(rangeTableEntry->subquery))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+
+static bool
+QueryContainsDistributedTableRTE(Query *query)
+{
+	ListCell *rteCell = NULL;
+
+	foreach(rteCell, query->rtable)
+	{
+		RangeTblEntry *rangeTableEntry = (RangeTblEntry *) lfirst(rteCell);
+
+		if (IsDistributedTableRTE((Node *) rangeTableEntry))
+		{
+			return true;
+		}
+
+		if (rangeTableEntry->rtekind == RTE_SUBQUERY &&
+			QueryContainsDistributedTableRTE(rangeTableEntry->subquery))
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 
