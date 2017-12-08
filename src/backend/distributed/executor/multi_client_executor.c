@@ -460,6 +460,10 @@ MultiClientResultStatus(int32 connectionId)
 		ereport(WARNING, (errmsg("could not maintain connection to worker node")));
 		return CLIENT_RESULT_UNAVAILABLE;
 	}
+	else if (connStatusType != CONNECTION_OK)
+	{
+		ereport(WARNING, (errmsg("connStatusType = %d", connStatusType)));
+	}
 
 	/* consume input to allow status change */
 	consumed = PQconsumeInput(connection->pgConn);
