@@ -15,6 +15,7 @@
 #include "postgres.h"
 #include "fmgr.h"
 #include "libpq-fe.h"
+#include "libpq-int.h"
 #include "miscadmin.h"
 
 #include "commands/dbcommands.h"
@@ -449,6 +450,7 @@ MultiClientResultStatus(int32 connectionId)
 	int consumed = 0;
 	ConnStatusType connStatusType = CONNECTION_OK;
 	ResultStatus resultStatus = CLIENT_INVALID_RESULT_STATUS;
+	struct pg_conn *pgConn = NULL;
 
 	Assert(connectionId != INVALID_CONNECTION_ID);
 	connection = ClientConnectionArray[connectionId];
@@ -463,6 +465,12 @@ MultiClientResultStatus(int32 connectionId)
 	else if (connStatusType != CONNECTION_OK)
 	{
 		ereport(WARNING, (errmsg("connStatusType = %d", connStatusType)));
+	}
+
+	pgConn = connection->pgConn;
+	if (pgConn->errorMessage.len > 0)
+	{
+		ereport(WARNING, (errmsg("connection error = %s", pgConn->errorMessage.data)));
 	}
 
 	/* consume input to allow status change */
