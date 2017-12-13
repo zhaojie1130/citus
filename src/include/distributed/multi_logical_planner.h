@@ -187,6 +187,10 @@ extern bool SubqueryPushdown;
 extern MultiTreeRoot * MultiLogicalPlanCreate(Query *originalQuery, Query *queryTree,
 											  PlannerRestrictionContext *
 											  plannerRestrictionContext);
+extern bool SingleRelationRepartitionSubquery(Query *queryTree);
+extern DeferredErrorMessage * DeferErrorIfCannotPushdownSubquery(Query *subqueryTree,
+																 bool
+																 outerMostQueryHasLimit);
 extern PlannerRestrictionContext * FilterPlannerRestrictionForQuery(
 	PlannerRestrictionContext *plannerRestrictionContext,
 	Query *query);
