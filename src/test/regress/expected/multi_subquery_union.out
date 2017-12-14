@@ -739,6 +739,8 @@ LIMIT 5;
 
 -- now lets also have some unsupported queries
 -- group by is not on the partition key
+-- but we can still recursively plan it, though that is not suffient for pushdown
+-- of the whole query
 SELECT user_id, sum(counter) 
 FROM (
     SELECT user_id, sum(value_2) AS counter FROM events_table GROUP BY user_id
@@ -746,8 +748,8 @@ FROM (
     SELECT value_1 as user_id, sum(value_2) AS counter FROM users_table GROUP BY value_1
 ) user_id 
 GROUP BY user_id;
-ERROR:  cannot pushdown the subquery since not all subqueries in the UNION have the partition column in the same position
-DETAIL:  Each leaf query of the UNION should return the partition column in the same position and all joins must be on the partition column
+ERROR:  cannot push down this subquery
+DETAIL:  Complex subqueries and CTEs are not supported within a UNION
 -- partition key is not selected
 SELECT sum(counter) 
 FROM (
@@ -1030,7 +1032,9 @@ FROM
 ) b;
 ERROR:  cannot pushdown the subquery since not all subqueries in the UNION have the partition column in the same position
 DETAIL:  Each leaf query of the UNION should return the partition column in the same position and all joins must be on the partition column
--- we don't support subqueries without relations
+-- we don't support pushing down subqueries without relations
+-- recursive planning can replace that query, though the whole
+-- query is not safe to pushdown
 SELECT 
   count(*)
 FROM 
@@ -1040,8 +1044,10 @@ FROM
   (SELECT 1)
 ) b;
 ERROR:  cannot push down this subquery
-DETAIL:  Subqueries without a FROM clause are not supported with union operator
--- we don't support subqueries without relations
+DETAIL:  Complex subqueries and CTEs are not supported within a UNION
+-- we don't support pushing down subqueries without relations
+-- recursive planning can replace that query, though the whole
+-- query is not safe to pushdown
 SELECT 
   *
 FROM 
@@ -1051,7 +1057,7 @@ FROM
   (SELECT (random() * 100)::int)
 ) b;
 ERROR:  cannot push down this subquery
-DETAIL:  Subqueries without a FROM clause are not supported with union operator
+DETAIL:  Complex subqueries and CTEs are not supported within a UNION
 -- we don't support subqueries without relations
 SELECT 
   user_id, value_3
@@ -1072,7 +1078,10 @@ FROM
 ORDER BY 1 DESC, 2 DESC
 LIMIT 5;
 ERROR:  cannot push down this subquery
-DETAIL:  Subqueries without a FROM clause are not supported with union operator
+DETAIL:  Complex subqueries and CTEs are not supported within a UNION
+-- we don't support pushing down subqueries without relations
+-- recursive planning can replace that query, though the whole
+-- query is not safe to pushdown
 SELECT ("final_query"."event_types") as types, count(*) AS sumOfEventType
 FROM
   ( SELECT *, random()
@@ -1116,7 +1125,7 @@ FROM
 GROUP BY types
 ORDER BY types;
 ERROR:  cannot push down this subquery
-DETAIL:  Subqueries without a FROM clause are not supported with union operator
+DETAIL:  Complex subqueries and CTEs are not supported within a UNION
 SET citus.enable_router_execution TO true;
 DROP TABLE events_reference_table;
 DROP TABLE users_reference_table;
