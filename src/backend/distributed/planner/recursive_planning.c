@@ -430,13 +430,6 @@ RecursivelyPlanSubquery(Query *subquery, RecursivePlanningContext *planningConte
 		(log_min_messages <= DEBUG1 || client_min_messages <= DEBUG1) ?
 		copyObject(subquery) : NULL;
 
-	/* we want to be able to handle queries with only intermediate results */
-	if (!EnableRouterExecution)
-	{
-		ereport(ERROR, (errmsg("cannot handle complex subqueries when the "
-							   "router executor is disabled")));
-	}
-
 	/*
 	 * Create the subplan and append it to the list in the planning context. Note that
 	 * subquery will through the standard planner, thus to properly deparse it we keep
