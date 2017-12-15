@@ -392,6 +392,13 @@ ShouldRecursivelyPlanSubquery(Query *subquery, RecursivePlanningContext *context
 			 */
 			shouldRecursivelyPlan = true;
 		}
+		else
+		{
+			/*
+			 * XXX: What about queries that are router plannable but not
+			 * suppoted by logical planner such as windown functions.
+			 */
+		}
 	}
 
 	/*
