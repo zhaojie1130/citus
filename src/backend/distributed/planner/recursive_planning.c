@@ -232,7 +232,7 @@ RecursivelyPlanCTEs(Query *query, RecursivePlanningContext *planningContext)
 
 		subPlanId = list_length(planningContext->subPlanList) + 1;
 
-		if (log_min_messages >= DEBUG1)
+		if (log_min_messages <= DEBUG1 || client_min_messages <= DEBUG1)
 		{
 			StringInfo subPlanString = makeStringInfo();
 			pg_get_query_def(subquery, subPlanString);
