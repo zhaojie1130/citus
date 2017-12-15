@@ -145,8 +145,11 @@ IN
       1)
     SELECT * FROM events LIMIT 10
   );
-ERROR:  cannot push down this subquery
-DETAIL:  Limit in subquery is currently unsupported
+ count 
+-------
+   101
+(1 row)
+
 -- CTE with non-colocated join in WHERE
 -- this is a tricky query that hits an aggresive
 -- check in subquery puwhdown after the recursive planning
@@ -172,5 +175,8 @@ WHERE
       )
       SELECT * FROM users LIMIT 10
     );
-ERROR:  cannot push down this subquery
-DETAIL:  Limit in subquery is currently unsupported
+ count 
+-------
+   101
+(1 row)
+

@@ -80,7 +80,7 @@ WHERE
       )
 LIMIT 3;
 ERROR:  cannot pushdown the subquery
-DETAIL:  Complex subqueries and CTEs are not allowed in the FROM clause when the query has subqueries in the WHERE clause
+DETAIL:  Functions are not allowed in FROM clause when the query has subqueries in WHERE clause
 -- subqueries without FROM are also treated as reference tables
 SELECT
   user_id
@@ -97,7 +97,7 @@ WHERE
       )
 LIMIT 3;
 ERROR:  cannot pushdown the subquery
-DETAIL:  Complex subqueries and CTEs are not allowed in the FROM clause when the query has subqueries in the WHERE clause
+DETAIL:  Subqueries without FROM are not allowed in FROM clause when the outer query has subqueries in WHERE clause
 -- join with distributed table prevents FROM from recurring
 SELECT
   DISTINCT user_id

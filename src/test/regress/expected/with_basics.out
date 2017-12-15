@@ -223,8 +223,20 @@ FROM
   (SELECT min(user_id) AS user_id FROM top_users) top_users
 JOIN
   users_table USING (user_id);
-ERROR:  cannot push down this subquery
-DETAIL:  Aggregates without group by are currently unsupported
+ user_id 
+---------
+       6
+       6
+       6
+       6
+       6
+       6
+       6
+       6
+       6
+       6
+(10 rows)
+
 -- FOR UPDATE in subquery on CTE
 WITH top_users AS (
 	SELECT user_id, value_2 FROM users_table ORDER BY user_id DESC LIMIT 10
@@ -262,8 +274,15 @@ ORDER BY
   user_id
 LIMIT
   5;
-ERROR:  cannot push down this subquery
-DETAIL:  Limit in subquery is currently unsupported
+ user_id 
+---------
+       6
+       6
+       6
+       6
+       6
+(5 rows)
+
 -- OFFSET in subquery on CTE
 WITH top_users AS (
 	SELECT user_id, value_2 FROM users_table ORDER BY user_id DESC LIMIT 10
@@ -278,8 +297,15 @@ ORDER BY
   user_id
 LIMIT
   5;
-ERROR:  cannot push down this subquery
-DETAIL:  Offset clause is currently unsupported
+ user_id 
+---------
+       6
+       6
+       6
+       6
+       6
+(5 rows)
+
 -- Unsupported join in CTE
 WITH top_users AS (
 	SELECT DISTINCT e.user_id FROM users_table u JOIN events_table e ON (u.user_id = e.user_id AND u.value_1 > e.value_2)

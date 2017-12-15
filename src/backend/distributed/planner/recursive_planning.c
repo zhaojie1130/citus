@@ -52,6 +52,7 @@
 #include "postgres.h"
 
 #include "catalog/pg_type.h"
+#include "catalog/pg_class.h"
 #include "distributed/citus_nodes.h"
 #include "distributed/citus_ruleutils.h"
 #include "distributed/distributed_planner.h"
@@ -100,6 +101,7 @@ static DeferredErrorMessage * RecursivelyPlanCTEs(Query *query,
 static bool RecursivelyPlanSubqueryWalker(Node *node, RecursivePlanningContext *context);
 static bool ShouldRecursivelyPlanSubquery(Query *subquery,
 										  RecursivePlanningContext *context);
+static bool IsLocalTableRTE(Node *node);
 static void RecursivelyPlanSubquery(Query *subquery,
 									RecursivePlanningContext *planningContext);
 static DistributedSubPlan * CreateDistributedSubPlan(uint32 subPlanId,
@@ -347,10 +349,8 @@ static bool
 ShouldRecursivelyPlanSubquery(Query *subquery, RecursivePlanningContext *context)
 {
 	bool shouldRecursivelyPlan = false;
-	bool needsDistributedPlanning = NeedsDistributedPlanning(subquery);
 
-	if (!needsDistributedPlanning &&
-		!ContainsReadIntermediateResultFunction((Node *) subquery))
+	if (FindNodeCheckInRangeTableList(subquery->rtable, IsLocalTableRTE))
 	{
 		/*
 		 * Postgres can always plan queries that don't require distributed planning.
@@ -359,7 +359,7 @@ ShouldRecursivelyPlanSubquery(Query *subquery, RecursivePlanningContext *context
 		 */
 		shouldRecursivelyPlan = true;
 	}
-	else if (needsDistributedPlanning)
+	else
 	{
 		if (DeferErrorIfCannotPushdownSubquery(subquery, false) == NULL)
 		{
@@ -418,6 +418,48 @@ ShouldRecursivelyPlanSubquery(Query *subquery, RecursivePlanningContext *context
 	}
 
 	return shouldRecursivelyPlan;
+}
+
+
+/*
+ * IsLocalTableRTE gets a node and returns true if the node
+ * is a range table relation entry that points to a local
+ * relation (i.e., not a distributed relation).
+ */
+static bool
+IsLocalTableRTE(Node *node)
+{
+	RangeTblEntry *rangeTableEntry = NULL;
+	Oid relationId = InvalidOid;
+
+	if (node == NULL)
+	{
+		return false;
+	}
+
+	if (!IsA(node, RangeTblEntry))
+	{
+		return false;
+	}
+
+	rangeTableEntry = (RangeTblEntry *) node;
+	if (rangeTableEntry->rtekind != RTE_RELATION)
+	{
+		return false;
+	}
+
+	if (rangeTableEntry->relkind == RELKIND_VIEW)
+	{
+		return false;
+	}
+
+	relationId = rangeTableEntry->relid;
+	if (!IsDistributedTable(relationId))
+	{
+		return true;
+	}
+
+	return false;
 }
 
 

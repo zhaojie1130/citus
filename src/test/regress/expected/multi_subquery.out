@@ -85,7 +85,7 @@ SELECT count(*) FROM
    (SELECT 1::bigint)
 ) b;
 ERROR:  cannot push down this subquery
-DETAIL:  Complex subqueries and CTEs are not supported within a UNION
+DETAIL:  Subqueries without a FROM clause are not supported with union operator
 -- Check that we error out if queries in union do not include partition columns.
 SELECT count(*) FROM
 (

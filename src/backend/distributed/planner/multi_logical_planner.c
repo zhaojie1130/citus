@@ -104,7 +104,6 @@ static bool ExtractSetOperationStatmentWalker(Node *node, List **setOperationLis
 static DeferredErrorMessage * DeferErrorIfUnsupportedTableCombination(Query *queryTree);
 static bool WindowPartitionOnDistributionColumn(Query *query);
 static bool AllTargetExpressionsAreColumnReferences(List *targetEntryList);
-static bool FindNodeCheckInRangeTableList(List *rtable, bool (*check)(Node *));
 static bool IsDistributedTableRTE(Node *node);
 static FieldSelect * CompositeFieldRecursive(Expr *expression, Query *query);
 static bool FullCompositeFieldList(List *compositeFieldList);
@@ -1513,7 +1512,7 @@ AllTargetExpressionsAreColumnReferences(List *targetEntryList)
  * FindNodeCheckInRangeTableList relies on FindNodeCheck() but only
  * considers the range table entries.
  */
-static bool
+bool
 FindNodeCheckInRangeTableList(List *rtable, bool (*check)(Node *))
 {
 	return range_table_walker(rtable, FindNodeCheck, check, QTW_EXAMINE_RTES);

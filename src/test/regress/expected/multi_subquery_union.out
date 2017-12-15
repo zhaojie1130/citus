@@ -1044,7 +1044,7 @@ FROM
   (SELECT 1)
 ) b;
 ERROR:  cannot push down this subquery
-DETAIL:  Complex subqueries and CTEs are not supported within a UNION
+DETAIL:  Subqueries without a FROM clause are not supported with union operator
 -- we don't support pushing down subqueries without relations
 -- recursive planning can replace that query, though the whole
 -- query is not safe to pushdown
@@ -1078,7 +1078,7 @@ FROM
 ORDER BY 1 DESC, 2 DESC
 LIMIT 5;
 ERROR:  cannot push down this subquery
-DETAIL:  Complex subqueries and CTEs are not supported within a UNION
+DETAIL:  Subqueries without a FROM clause are not supported with union operator
 -- we don't support pushing down subqueries without relations
 -- recursive planning can replace that query, though the whole
 -- query is not safe to pushdown
