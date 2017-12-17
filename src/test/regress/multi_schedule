@@ -44,6 +44,8 @@ test: multi_partitioning_utils multi_partitioning
 # ----------
 test: multi_recursive_subquery_basics multi_recursive_subquery_local_tables multi_recursive_subquery_executors multi_recursive_subquery_and_cte
 test: multi_recursive_deep_subqueries multi_recursive_view multi_recursive_subquery_partitioning multi_recursive_subquery_complex_target_list multi_recursive_not_supported_subqueries
+test: recursive_set_operations
+
 # ----------
 # Miscellaneous tests to check our query planning behavior
 # ----------
