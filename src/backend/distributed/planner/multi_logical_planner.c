@@ -97,9 +97,6 @@ static bool RangeTableArrayContainsAnyRTEIdentities(RangeTblEntry **rangeTableEn
 													queryRteIdentities);
 static Relids QueryRteIdentities(Query *queryTree);
 static DeferredErrorMessage * DeferErrorIfFromClauseRecurs(Query *queryTree);
-static DeferredErrorMessage * DeferErrorIfUnsupportedUnionQuery(Query *queryTree,
-																bool
-																outerMostQueryHasLimit);
 static bool ExtractSetOperationStatmentWalker(Node *node, List **setOperationList);
 static DeferredErrorMessage * DeferErrorIfUnsupportedTableCombination(Query *queryTree);
 static bool WindowPartitionOnDistributionColumn(Query *query);
@@ -973,8 +970,7 @@ DeferErrorIfCannotPushdownSubquery(Query *subqueryTree, bool outerMostQueryHasLi
 
 	if (subqueryTree->setOperations)
 	{
-		deferredError = DeferErrorIfUnsupportedUnionQuery(subqueryTree,
-														  outerMostQueryHasLimit);
+		deferredError = DeferErrorIfUnsupportedUnionQuery(subqueryTree);
 		if (deferredError)
 		{
 			return deferredError;
@@ -1083,9 +1079,8 @@ DeferErrorIfCannotPushdownSubquery(Query *subqueryTree, bool outerMostQueryHasLi
  * DeferErrorIfUnsupportedUnionQuery is a helper function for ErrorIfCannotPushdownSubquery().
  * The function also errors out for set operations INTERSECT and EXCEPT.
  */
-static DeferredErrorMessage *
-DeferErrorIfUnsupportedUnionQuery(Query *subqueryTree,
-								  bool outerMostQueryHasLimit)
+DeferredErrorMessage *
+DeferErrorIfUnsupportedUnionQuery(Query *subqueryTree)
 {
 	List *setOperationStatementList = NIL;
 	ListCell *setOperationStatmentCell = NULL;
@@ -1516,6 +1511,17 @@ bool
 FindNodeCheckInRangeTableList(List *rtable, bool (*check)(Node *))
 {
 	return range_table_walker(rtable, FindNodeCheck, check, QTW_EXAMINE_RTES);
+}
+
+
+/*
+ * QueryContainsDistributedTableRTE determines whether the given
+ * qury contains a distributed table.
+ */
+bool
+QueryContainsDistributedTableRTE(Query *query)
+{
+	return FindNodeCheck((Node *) query, IsDistributedTableRTE);
 }
 
 

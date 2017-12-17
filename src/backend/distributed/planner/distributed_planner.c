@@ -83,7 +83,7 @@ static PlannerRestrictionContext * CurrentPlannerRestrictionContext(void);
 static void PopPlannerRestrictionContext(void);
 static bool HasUnresolvedExternParamsWalker(Node *expression, ParamListInfo boundParams);
 
-
+#include "nodes/print.h"
 /* Distributed planner hook */
 PlannedStmt *
 distributed_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
