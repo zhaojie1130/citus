@@ -536,8 +536,8 @@ WHERE
 GROUP BY user_id
 HAVING count(*) > 1 AND sum(value_2) > 29
 ORDER BY 1;
-ERROR:  cannot pushdown the subquery since all relations are not joined using distribution keys
-DETAIL:  Each relation should be joined with at least one another relation using distribution keys and equality operator.
+ERROR:  cannot pushdown the subquery
+DETAIL:  Complex subqueries and CTEs cannot be in the outer part of the outer join
 -- NOT EXISTS query has non-equi join
 SELECT user_id, array_length(events_table, 1)
 FROM (

@@ -228,13 +228,7 @@ WHERE
 GROUP BY user_id
 HAVING count(*) > 1 AND sum(value_2) > 29
 ORDER BY 1;
-DEBUG:  generating subplan 10_1 for subquery SELECT user_id, count(*) AS count_pay FROM subquery_local_tables.users_table_local WHERE ((user_id >= 1) AND (user_id <= 3) AND (value_1 > 3) AND (value_1 < 5)) GROUP BY user_id HAVING (count(*) > 1) LIMIT 10
- user_id 
----------
-       2
-       3
-(2 rows)
-
+ERROR:  relation users_table_local is not distributed
 SET client_min_messages TO DEFAULT;
 DROP SCHEMA subquery_local_tables CASCADE;
 NOTICE:  drop cascades to 2 other objects
