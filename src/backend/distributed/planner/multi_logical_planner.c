@@ -125,7 +125,7 @@ static bool IsRecurringRTE(RangeTblEntry *rangeTableEntry,
 static bool IsRecurringRangeTable(List *rangeTable, RecurringTuplesType *recurType);
 static bool HasRecurringTuples(Node *node, RecurringTuplesType *recurType);
 static bool IsReadIntermediateResultFunction(Node *node);
-static void ValidateClauseList(List *clauseList);
+static DeferredErrorMessage * ValidateClauseList(List *clauseList);
 static bool ExtractFromExpressionWalker(Node *node,
 										QualifierWalkerContext *walkerContext);
 static List * MultiTableNodeList(List *tableEntryList, List *rangeTableList);
@@ -224,6 +224,8 @@ MultiLogicalPlanCreate(Query *originalQuery, Query *queryTree,
 static bool
 ShouldUseSubqueryPushDown(Query *originalQuery, Query *rewrittenQuery)
 {
+	List *whereClauseList = NIL;
+
 	/*
 	 * We check the existence of subqueries in FROM clause on the modified query
 	 * given that if postgres already flattened the subqueries, MultiPlanTree()
@@ -250,6 +252,12 @@ ShouldUseSubqueryPushDown(Query *originalQuery, Query *rewrittenQuery)
 	 * does not know how to handle them.
 	 */
 	if (FindNodeCheck((Node *) originalQuery, IsFunctionRTE))
+	{
+		return true;
+	}
+
+	whereClauseList = WhereClauseList(rewrittenQuery->jointree);
+	if (ValidateClauseList(whereClauseList) != NULL)
 	{
 		return true;
 	}
@@ -1766,6 +1774,7 @@ MultiNodeTree(Query *queryTree)
 	MultiExtendedOp *extendedOpNode = NULL;
 	MultiNode *currentTopNode = NULL;
 	DeferredErrorMessage *unsupportedQueryError = NULL;
+	DeferredErrorMessage *deferredError PG_USED_FOR_ASSERTS_ONLY = NULL;
 
 	/* verify we can perform distributed planning on this query */
 	unsupportedQueryError = DeferErrorIfQueryNotSupported(queryTree);
@@ -1776,7 +1785,8 @@ MultiNodeTree(Query *queryTree)
 
 	/* extract where clause qualifiers and verify we can plan for them */
 	whereClauseList = WhereClauseList(queryTree->jointree);
-	ValidateClauseList(whereClauseList);
+	deferredError = ValidateClauseList(whereClauseList);
+	Assert(deferredError == NULL);
 
 	/*
 	 * If we have a subquery, build a multi table node for the subquery and
@@ -2752,7 +2762,7 @@ QualifierList(FromExpr *fromExpr)
  * can recognize all the clauses. This function ensures that we do not drop an
  * unsupported clause type on the floor, and thus prevents erroneous results.
  */
-static void
+static DeferredErrorMessage *
 ValidateClauseList(List *clauseList)
 {
 	ListCell *clauseCell = NULL;
@@ -2762,10 +2772,11 @@ ValidateClauseList(List *clauseList)
 
 		if (!(IsSelectClause(clause) || IsJoinClause(clause) || or_clause(clause)))
 		{
-			ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-							errmsg("unsupported clause type")));
+			return DeferredError(ERRCODE_FEATURE_NOT_SUPPORTED,
+								 "unsupported clause type", NULL, NULL);
 		}
 	}
+	return NULL;
 }
 
 
