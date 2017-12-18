@@ -2637,10 +2637,12 @@ HasComplexRangeTableType(Query *queryTree)
 
 		/*
 		 * Check if the range table in the join tree is a simple relation or a
-		 * subquery.
+		 * subquery or a function. Note that RTE_FUNCTIONs are handled via (sub)query
+		 * pushdown.
 		 */
 		if (rangeTableEntry->rtekind != RTE_RELATION &&
-			rangeTableEntry->rtekind != RTE_SUBQUERY)
+			rangeTableEntry->rtekind != RTE_SUBQUERY &&
+			rangeTableEntry->rtekind != RTE_FUNCTION)
 		{
 			hasComplexRangeTableType = true;
 		}

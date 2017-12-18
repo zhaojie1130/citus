@@ -465,8 +465,8 @@ ORDER BY
 	1,2,3,4,5,6
 LIMIT 
 	10;
-ERROR:  cannot push down this subquery
-DETAIL:  Complex subqueries and CTEs are not supported within a UNION
+ERROR:  could not run distributed query with UNION, INTERSECT, or EXCEPT
+HINT:  Consider using an equality filter on the distributed table's partition column.
 SELECT * FROM (
 	SELECT * FROM (WITH cte AS (
 			SELECT * FROM users_table
@@ -477,8 +477,8 @@ ORDER BY
 1,2,3,4,5,6
 LIMIT 
 10;
-ERROR:  cannot push down this subquery
-DETAIL:  Complex subqueries and CTEs are not supported within a UNION
+ERROR:  could not run distributed query with UNION, INTERSECT, or EXCEPT
+HINT:  Consider using an equality filter on the distributed table's partition column.
 -- SELECT * FROM (SELECT * FROM cte UNION SELECT * FROM cte) a; should work
 WITH cte AS (
 	SELECT * FROM users_table WHERE user_id IN (1, 2)

@@ -348,57 +348,30 @@ RecursivelyPlanSubqueryWalker(Node *node, RecursivePlanningContext *context)
 static bool
 ShouldRecursivelyPlanSubquery(Query *subquery, RecursivePlanningContext *context)
 {
-	bool shouldRecursivelyPlan = false;
-
 	if (FindNodeCheckInRangeTableList(subquery->rtable, IsLocalTableRTE))
 	{
 		/*
 		 * Postgres can always plan queries that don't require distributed planning.
 		 * Note that we need to check this first, otherwise the calls to the many other
 		 * Citus planner functions would error our due to local relations.
+		 *
+		 * TODO: We could only successfully create distributed plans with local tables
+		 * when the local tables are on the leaf queries and the upper level queries
+		 * do not contain any other local tables.
 		 */
-		shouldRecursivelyPlan = true;
 	}
-	else
+	else if (DeferErrorIfCannotPushdownSubquery(subquery, false) == NULL)
 	{
-		if (DeferErrorIfCannotPushdownSubquery(subquery, false) == NULL)
-		{
-			/*
-			 * Citus can pushdown this subquery, no need to recursively
-			 * plan which is much expensive than pushdown.
-			 */
-			shouldRecursivelyPlan = false;
-		}
-		else if (TaskExecutorType == MULTI_EXECUTOR_TASK_TRACKER &&
-				 SingleRelationRepartitionSubquery(subquery))
-		{
-			/* Citus could plan this subquery through re-partitioning */
-			shouldRecursivelyPlan = false;
-		}
-		else if (DeferErrorIfQueryNotSupported(subquery) == NULL)
-		{
-			/*
-			 * At this point, we might be passing a query with or without
-			 * subqueries to DeferErrorIfQueryNotSupported().
-			 *
-			 * In case of a query without any subqueries, we're OK given that
-			 * DeferErrorIfQueryNotSupported() is purely designed for such queries.
-			 *
-			 * In case of a query with subqueries in it, we're still OK given that
-			 * we had already checked those subqueries via the previous recursive calls
-			 * and each of the subqueries are guaranteed to be safe to pushdown or
-			 * already replaced with intermediate results. Thus, we're only interested
-			 * in the checks that we do do the top-level query.
-			 */
-			shouldRecursivelyPlan = true;
-		}
-		else
-		{
-			/*
-			 * XXX: What about queries that are router plannable but not
-			 * suppoted by logical planner such as windown functions.
-			 */
-		}
+		/*
+		 * Citus can pushdown this subquery, no need to recursively
+		 * plan which is much expensive than pushdown.
+		 */
+		return false;
+	}
+	else if (TaskExecutorType == MULTI_EXECUTOR_TASK_TRACKER &&
+			 SingleRelationRepartitionSubquery(subquery))
+	{
+		return false;
 	}
 
 	/*
@@ -406,7 +379,7 @@ ShouldRecursivelyPlanSubquery(Query *subquery, RecursivePlanningContext *context
 	 * that the subquery doesn't contain any references to the outer
 	 * queries.
 	 */
-	if (shouldRecursivelyPlan && ContainsReferencesToOuterQuery(subquery))
+	if (ContainsReferencesToOuterQuery(subquery))
 	{
 		if (log_min_messages <= DEBUG2 || client_min_messages <= DEBUG2)
 		{
@@ -417,7 +390,7 @@ ShouldRecursivelyPlanSubquery(Query *subquery, RecursivePlanningContext *context
 		return false;
 	}
 
-	return shouldRecursivelyPlan;
+	return true;
 }
 
 
@@ -454,12 +427,12 @@ IsLocalTableRTE(Node *node)
 	}
 
 	relationId = rangeTableEntry->relid;
-	if (!IsDistributedTable(relationId))
+	if (IsDistributedTable(relationId))
 	{
-		return true;
+		return false;
 	}
 
-	return false;
+	return true;
 }
 
 
@@ -475,14 +448,19 @@ RecursivelyPlanSubquery(Query *subquery, RecursivePlanningContext *planningConte
 	int subPlanId = 0;
 
 	Query *resultQuery = NULL;
-	Query *debugQuery =
-		(log_min_messages <= DEBUG1 || client_min_messages <= DEBUG1) ?
-		copyObject(subquery) : NULL;
+	Query *debugQuery = NULL;
 
 	/*
-	 * Create the subplan and append it to the list in the planning context. Note that
-	 * subquery will through the standard planner, thus to properly deparse it we keep
+	 *  Subquery will through the standard planner, thus to properly deparse it we keep
 	 * its copy: debugQuery.
+	 */
+	if (log_min_messages <= DEBUG1 || client_min_messages <= DEBUG1)
+	{
+		debugQuery = copyObject(subquery);
+	}
+
+	/*
+	 * Create the subplan and append it to the list in the planning context.
 	 */
 	subPlanId = list_length(planningContext->subPlanList) + 1;
 
