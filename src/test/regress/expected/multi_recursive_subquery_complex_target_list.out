@@ -224,7 +224,7 @@ FROM (
       	   LIMIT 3
         ) as c 
         WHERE b.value_2 != a.user_id
-        ORDER BY 2 DESC, 1 DESC
+        ORDER BY 3 DESC, 2 DESC, 1 DESC
         LIMIT 5;
 DEBUG:  push down of limit count: 3
 DEBUG:  generating subplan 19_1 for subquery SELECT user_id FROM public.users_table WHERE (value_1 > 2) GROUP BY user_id HAVING (count(DISTINCT value_1) > 2) ORDER BY user_id DESC LIMIT 3
@@ -232,11 +232,11 @@ DEBUG:  generating subplan 19_2 for subquery SELECT value_2 FROM public.users_ta
 DEBUG:  generating subplan 19_3 for subquery SELECT avg(user_id) AS avg FROM public.users_table WHERE (value_1 > 2) GROUP BY value_2 HAVING (sum(value_1) > 10) ORDER BY ((sum(value_3) - (avg(value_1))::double precision) - (COALESCE((array_upper(ARRAY[max(user_id)], 1) * 5), 0))::double precision) DESC LIMIT 3
  user_id | value_2 |        avg         
 ---------+---------+--------------------
-       4 |       5 | 2.8461538461538462
        4 |       5 | 4.1666666666666667
-       4 |       5 | 4.0000000000000000
        3 |       5 | 4.1666666666666667
-       3 |       5 | 4.0000000000000000
+       5 |       4 | 4.1666666666666667
+       3 |       4 | 4.1666666666666667
+       5 |       3 | 4.1666666666666667
 (5 rows)
 
 -- zero shard subquery joined with a regular one

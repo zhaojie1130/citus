@@ -1146,13 +1146,13 @@ DEBUG:  Plan is router executable
 SELECT id, MIN(id) over (order by word_count)
 	FROM articles_hash_mx
 	WHERE author_id = 1 or author_id = 2;
-ERROR:  could not run distributed query becuase the window function that is used cannot be pushed down
-HINT:  Window functions are supported in two ways. Either add an quality filter on the distributed tables' partition columns or use the window functions inside a subquery with PARTITION BY clause containing the distribution column
+ERROR:  could not run distributed query because the window function that is used cannot be pushed down
+HINT:  Window functions are supported in two ways. Either add an equality filter on the distributed tables' partition column or use the window functions inside a subquery with a PARTITION BY clause containing the distribution column
 SELECT LAG(title, 1) over (ORDER BY word_count) prev, title, word_count 
 	FROM articles_hash_mx
 	WHERE author_id = 5 or author_id = 2;
-ERROR:  could not run distributed query becuase the window function that is used cannot be pushed down
-HINT:  Window functions are supported in two ways. Either add an quality filter on the distributed tables' partition columns or use the window functions inside a subquery with PARTITION BY clause containing the distribution column
+ERROR:  could not run distributed query because the window function that is used cannot be pushed down
+HINT:  Window functions are supported in two ways. Either add an equality filter on the distributed tables' partition column or use the window functions inside a subquery with a PARTITION BY clause containing the distribution column
 -- complex query hitting a single shard 	
 SELECT
 	count(DISTINCT CASE

@@ -179,7 +179,7 @@ FROM (
         ) as c 
 
         WHERE b.value_2 != a.user_id
-        ORDER BY 2 DESC, 1 DESC
+        ORDER BY 3 DESC, 2 DESC, 1 DESC
         LIMIT 5;
 
 -- zero shard subquery joined with a regular one

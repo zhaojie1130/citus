@@ -2254,7 +2254,7 @@ DeferErrorIfQueryNotSupported(Query *queryTree)
 	if (queryTree->hasWindowFuncs)
 	{
 		preconditionsSatisfied = false;
-		errorMessage = "could not run distributed query becuase the window "
+		errorMessage = "could not run distributed query because the window "
 					   "function that is used cannot be pushed down";
 		errorHint = "Window functions are supported in two ways. Either add "
 					"an equality filter on the distributed tables' partition "
