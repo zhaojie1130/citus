@@ -76,6 +76,20 @@
 
 
 /*
+ * RecursivePlanningContext is used to recursively plan subqueries
+ * and CTEs, pull results to the coordinator, and push it back into
+ * the workers.
+ */
+typedef struct RecursivePlanningContext
+{
+	int level;
+	uint64 planId;
+	List *subPlanList;
+	PlannerRestrictionContext *plannerRestrictionContext;
+} RecursivePlanningContext;
+
+
+/*
  * CteReferenceWalkerContext is used to collect CTE references in
  * CteReferenceListWalker.
  */
@@ -96,6 +110,9 @@ typedef struct VarLevelsUpWalkerContext
 
 
 /* local function forward declarations */
+static DeferredErrorMessage * RecursivelyPlanSubqueriesAndCTEs(Query *query,
+															   RecursivePlanningContext *
+															   context);
 static DeferredErrorMessage * RecursivelyPlanCTEs(Query *query,
 												  RecursivePlanningContext *context);
 static bool RecursivelyPlanSubqueryWalker(Node *node, RecursivePlanningContext *context);
@@ -114,6 +131,40 @@ static Query * BuildSubPlanResultQuery(Query *subquery, uint64 planId, uint32 su
 
 
 /*
+ * GenerateSubplansForSubqueriesAndCTEs is a wrapper around RecursivelyPlanSubqueriesAndCTEs.
+ * The function returns the subplans if necessary. For the details of when/how subplans are
+ * generated, see RecursivelyPlanSubqueriesAndCTEs().
+ *
+ * Note that the input originalQuery query is modified if any subplans are generated.
+ */
+List *
+GenerateSubplansForSubqueriesAndCTEs(uint64 planId, Query *originalQuery,
+									 PlannerRestrictionContext *plannerRestrictionContext)
+{
+	RecursivePlanningContext context;
+	DeferredErrorMessage *error = NULL;
+
+	/*
+	 * Plan subqueries and CTEs that cannot be pushed down by recursively
+	 * calling the planner and add the resulting plans to subPlanList.
+	 */
+	context.level = 0;
+	context.planId = planId;
+	context.subPlanList = NIL;
+	context.plannerRestrictionContext = plannerRestrictionContext;
+
+	error = RecursivelyPlanSubqueriesAndCTEs(originalQuery, &context);
+
+	if (error != NULL)
+	{
+		RaiseDeferredError(error, ERROR);
+	}
+
+	return context.subPlanList;
+}
+
+
+/*
  * RecursivelyPlanSubqueriesAndCTEs finds subqueries and CTEs that cannot be pushed down to
  * workers directly and instead plans them by recursively calling the planner and
  * adding the subplan to subPlanList.
@@ -127,7 +178,7 @@ static Query * BuildSubPlanResultQuery(Query *subquery, uint64 planId, uint32 su
  * If recursive planning results in an error then the error is returned. Otherwise, the
  * subplans will be added to subPlanList.
  */
-DeferredErrorMessage *
+static DeferredErrorMessage *
 RecursivelyPlanSubqueriesAndCTEs(Query *query, RecursivePlanningContext *context)
 {
 	DeferredErrorMessage *error = NULL;
@@ -320,6 +371,11 @@ RecursivelyPlanSubqueryWalker(Node *node, RecursivePlanningContext *context)
 		DeferredErrorMessage *error = NULL;
 
 		context->level += 1;
+
+		/*
+		 * First, make sure any subqueries and CTEs within this subquery
+		 * are recursively planned if necessary.
+		 */
 		error = RecursivelyPlanSubqueriesAndCTEs(query, context);
 		if (error != NULL)
 		{
@@ -327,6 +383,10 @@ RecursivelyPlanSubqueryWalker(Node *node, RecursivePlanningContext *context)
 		}
 		context->level -= 1;
 
+		/*
+		 * Recursively plan this subquery if it cannot be pushed down and is
+		 * eligible for recursive planning.
+		 */
 		if (ShouldRecursivelyPlanSubquery(query, context))
 		{
 			RecursivelyPlanSubquery(query, context);
