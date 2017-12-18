@@ -2254,8 +2254,12 @@ DeferErrorIfQueryNotSupported(Query *queryTree)
 	if (queryTree->hasWindowFuncs)
 	{
 		preconditionsSatisfied = false;
-		errorMessage = "could not run distributed query with window functions";
-		errorHint = filterHint;
+		errorMessage = "could not run distributed query becuase the window "
+					   "function that is used cannot be pushed down";
+		errorHint = "Window functions are supported in two ways. Either add "
+					"an quality filter on the distributed tables' partition "
+					"columns or use the window functions inside a subquery with "
+					"PARTITION BY clause containing the distribution column";
 	}
 
 	if (queryTree->setOperations)
