@@ -523,7 +523,7 @@ FinishConnectionEstablishment(MultiConnection *connection)
 		{
 			int pollResult = 0;
 
-	/* we use poll(2) if available, otherwise select(2) */
+			/* we use poll(2) if available, otherwise select(2) */
 #ifdef HAVE_POLL
 			struct pollfd pollFileDescriptor;
 
