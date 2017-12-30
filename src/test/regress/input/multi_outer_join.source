@@ -43,12 +43,11 @@ CREATE TABLE multi_outer_join_third
 	t_mktsegment char(10) not null,
 	t_comment varchar(117) not null
 );
-SELECT master_create_distributed_table('multi_outer_join_third', 't_custkey', 'append');
+SELECT create_reference_table('multi_outer_join_third');
 
 -- Manually colocate tables multi_outer_join_left, multi_outer_join_right and multi_outer_join_third
 UPDATE pg_dist_partition SET colocationid = 100001 WHERE logicalrelid = 'multi_outer_join_right'::regclass 
-												      OR logicalrelid = 'multi_outer_join_left'::regclass
-												      OR logicalrelid = 'multi_outer_join_third'::regclass;
+												      OR logicalrelid = 'multi_outer_join_left'::regclass;
 
 -- Make sure we do not crash if both tables have no shards
 SELECT

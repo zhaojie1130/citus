@@ -55,7 +55,7 @@ CREATE TABLE customer (
 	c_acctbal decimal(15,2) not null,
 	c_mktsegment char(10) not null,
 	c_comment varchar(117) not null);
-SELECT master_create_distributed_table('customer', 'c_custkey', 'append');
+SELECT create_reference_table('customer');
 
 CREATE TABLE nation (
 	n_nationkey integer not null,
@@ -75,7 +75,7 @@ CREATE TABLE part (
 	p_container char(10) not null,
 	p_retailprice decimal(15,2) not null,
 	p_comment varchar(23) not null);
-SELECT master_create_distributed_table('part', 'p_partkey', 'append');
+SELECT create_reference_table('part');
 
 CREATE TABLE supplier
 (
@@ -383,8 +383,8 @@ COMMIT;
 
 -- Table should exist on the worker node
 \c - - - :worker_1_port
-SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.tt1_360066'::regclass;
-SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.tt2_360070'::regclass;
+SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.tt1_360068'::regclass;
+SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.tt2_360072'::regclass;
 \c - - - :master_port
 
 DROP TABLE tt1;
@@ -400,7 +400,7 @@ ROLLBACK;
 
 -- Table exists on the worker node.
 \c - - - :worker_1_port
-SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.append_tt1_360074'::regclass;
+SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.append_tt1_360076'::regclass;
 \c - - - :master_port
 
 -- There should be no table on the worker node
@@ -420,7 +420,7 @@ COMMIT;
 
 -- Placements should be created on the worker
 \c - - - :worker_1_port
-SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.tt1_360075'::regclass;
+SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.tt1_360077'::regclass;
 \c - - - :master_port
 
 DROP TABLE tt1;

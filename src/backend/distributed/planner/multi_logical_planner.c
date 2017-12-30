@@ -3638,7 +3638,7 @@ JoinRuleApplyFunction(JoinRuleType ruleType)
 
 	if (!ruleApplyFunctionInitialized)
 	{
-		RuleApplyFunctionArray[BROADCAST_JOIN] = &ApplyBroadcastJoin;
+		RuleApplyFunctionArray[REFERENCE_TABLE_JOIN] = &ApplyBroadcastJoin;
 		RuleApplyFunctionArray[LOCAL_PARTITION_JOIN] = &ApplyLocalJoin;
 		RuleApplyFunctionArray[SINGLE_PARTITION_JOIN] = &ApplySinglePartitionJoin;
 		RuleApplyFunctionArray[DUAL_PARTITION_JOIN] = &ApplyDualPartitionJoin;
@@ -3664,7 +3664,7 @@ ApplyBroadcastJoin(MultiNode *leftNode, MultiNode *rightNode,
 				   List *applicableJoinClauses)
 {
 	MultiJoin *joinNode = CitusMakeNode(MultiJoin);
-	joinNode->joinRuleType = BROADCAST_JOIN;
+	joinNode->joinRuleType = REFERENCE_TABLE_JOIN;
 	joinNode->joinType = joinType;
 	joinNode->joinClauseList = applicableJoinClauses;
 

@@ -7,12 +7,12 @@ SET citus.next_shard_id TO 230000;
 
 
 -- Initialize tables to join
-CREATE TABLE multi_append_table_to_shard_right
+CREATE TABLE multi_append_table_to_shard_right_reference
 (
 	right_number INTEGER not null,
 	right_text TEXT not null
 );
-SELECT master_create_distributed_table('multi_append_table_to_shard_right', 'right_number', 'append');
+SELECT create_reference_table('multi_append_table_to_shard_right_reference');
 
 CREATE TABLE multi_append_table_to_shard_left
 (
@@ -35,8 +35,7 @@ SELECT set_config('citus.shard_replication_factor', '2', false);
 \copy multi_append_table_to_shard_left FROM '@abs_srcdir@/data/agg.data'
 
 -- Place 'right' table on both workers
-SELECT set_config('citus.shard_replication_factor', '2', false);
-\copy multi_append_table_to_shard_right FROM '@abs_srcdir@/data/agg.data'
+\copy multi_append_table_to_shard_right_reference FROM '@abs_srcdir@/data/agg.data'
 
 -- Reset shard replication factor to ensure tasks will be assigned to both workers
 SELECT set_config('citus.shard_replication_factor', '2', false);

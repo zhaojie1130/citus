@@ -64,9 +64,9 @@ CREATE TABLE customer (
 	c_acctbal decimal(15,2) not null,
 	c_mktsegment char(10) not null,
 	c_comment varchar(117) not null);
-SELECT master_create_distributed_table('customer', 'c_custkey', 'append');
- master_create_distributed_table 
----------------------------------
+SELECT create_reference_table('customer');
+ create_reference_table 
+------------------------
  
 (1 row)
 
@@ -91,9 +91,9 @@ CREATE TABLE part (
 	p_container char(10) not null,
 	p_retailprice decimal(15,2) not null,
 	p_comment varchar(23) not null);
-SELECT master_create_distributed_table('part', 'p_partkey', 'append');
- master_create_distributed_table 
----------------------------------
+SELECT create_reference_table('part');
+ create_reference_table 
+------------------------
  
 (1 row)
 
@@ -697,13 +697,13 @@ INSERT INTO tt2 SELECT * FROM tt1 WHERE id = 1;
 COMMIT;
 -- Table should exist on the worker node
 \c - - - :worker_1_port
-SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.tt1_360066'::regclass;
+SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.tt1_360068'::regclass;
  Column |  Type   | Modifiers 
 --------+---------+-----------
  id     | integer | 
 (1 row)
 
-SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.tt2_360070'::regclass;
+SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.tt2_360072'::regclass;
  Column |  Type   | Modifiers 
 --------+---------+-----------
  id     | integer | 
@@ -725,13 +725,14 @@ SELECT create_distributed_table('append_tt1','id','append');
 SELECT master_create_empty_shard('append_tt1');
  master_create_empty_shard 
 ---------------------------
-                    360074
+                    360076
 (1 row)
 
 ROLLBACK;
 -- Table exists on the worker node.
 \c - - - :worker_1_port
-SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.append_tt1_360074'::regclass;
+
+SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.append_tt1_360076'::regclass;
  Column |  Type   | Modifiers 
 --------+---------+-----------
  id     | integer | 
@@ -768,7 +769,7 @@ SELECT * FROM tt1 WHERE id = 1;
 COMMIT;
 -- Placements should be created on the worker
 \c - - - :worker_1_port
-SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.tt1_360075'::regclass;
+SELECT "Column", "Type", "Modifiers" FROM table_desc WHERE relid = 'public.tt1_360077'::regclass;
  Column |  Type   | Modifiers 
 --------+---------+-----------
  id     | integer | 
