@@ -3,6 +3,7 @@
 --
 
 ALTER SEQUENCE pg_catalog.pg_dist_shardid_seq RESTART 360000;
+ALTER SEQUENCE pg_catalog.pg_dist_colocationid_seq RESTART 100000;
 
 -- Create new table definitions for use in testing in distributed planning and
 -- execution functionality. Also create indexes to boost performance.
@@ -41,6 +42,10 @@ CREATE TABLE orders (
 	o_comment varchar(79) not null,
 	PRIMARY KEY(o_orderkey) );
 SELECT master_create_distributed_table('orders', 'o_orderkey', 'append');
+
+-- Manually colocate tables lineitem and orders
+UPDATE pg_dist_partition SET colocationid = 100000 WHERE logicalrelid = 'orders'::regclass
+													  OR logicalrelid = 'lineitem'::regclass;
 
 CREATE TABLE customer (
 	c_custkey integer not null,

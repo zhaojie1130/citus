@@ -103,7 +103,8 @@ static JoinOrderNode * CartesianProduct(JoinOrderNode *joinNode,
 										JoinType joinType);
 static JoinOrderNode * MakeJoinOrderNode(TableEntry *tableEntry, JoinRuleType
 										 joinRuleType, Var *partitionColumn,
-										 char partitionMethod);
+										 char partitionMethod,
+										 TableEntry *anchorTable);
 
 
 /*
@@ -295,7 +296,8 @@ CreateFirstJoinOrderNode(FromExpr *fromExpr, List *tableEntryList)
 
 	firstJoinNode = MakeJoinOrderNode(firstTable, firstJoinRule,
 									  firstPartitionColumn,
-									  firstPartitionMethod);
+									  firstPartitionMethod,
+									  firstTable);
 
 	firstJoinNode->shardIntervalList = LoadShardIntervalList(firstTable->relationId);
 
@@ -671,7 +673,8 @@ JoinOrderForTable(TableEntry *firstTable, List *tableEntryList, List *joinClause
 
 	JoinOrderNode *firstJoinNode = MakeJoinOrderNode(firstTable, firstJoinRule,
 													 firstPartitionColumn,
-													 firstPartitionMethod);
+													 firstPartitionMethod,
+													 firstTable);
 
 	/* add first node to the join order */
 	joinOrderList = list_make1(firstJoinNode);
@@ -1195,7 +1198,8 @@ BroadcastJoin(JoinOrderNode *currentJoinNode, TableEntry *candidateTable,
 	{
 		nextJoinNode = MakeJoinOrderNode(candidateTable, BROADCAST_JOIN,
 										 currentJoinNode->partitionColumn,
-										 currentJoinNode->partitionMethod);
+										 currentJoinNode->partitionMethod,
+										 currentJoinNode->anchorTable);
 	}
 
 	return nextJoinNode;
@@ -1221,7 +1225,18 @@ LocalJoin(JoinOrderNode *currentJoinNode, TableEntry *candidateTable,
 	Var *currentPartitionColumn = currentJoinNode->partitionColumn;
 	char candidatePartitionMethod = PartitionMethod(relationId);
 	char currentPartitionMethod = currentJoinNode->partitionMethod;
+	TableEntry *currentAnchorTable = currentJoinNode->anchorTable;
 	bool joinOnPartitionColumns = false;
+	bool coPartitionedTables = false;
+
+	/*
+	 * If we previously dual-hash re-partitioned the tables for a join, we
+	 * currently don't allow local join.
+	 */
+	if (currentPartitionMethod == REDISTRIBUTE_BY_HASH)
+	{
+		return NULL;
+	}
 
 	/* the partition method should be the same for a local join */
 	if (currentPartitionMethod != candidatePartitionMethod)
@@ -1232,12 +1247,24 @@ LocalJoin(JoinOrderNode *currentJoinNode, TableEntry *candidateTable,
 	joinOnPartitionColumns = JoinOnColumns(currentPartitionColumn,
 										   candidatePartitionColumn,
 										   applicableJoinClauses);
-	if (joinOnPartitionColumns)
+	if (!joinOnPartitionColumns)
 	{
-		nextJoinNode = MakeJoinOrderNode(candidateTable, LOCAL_PARTITION_JOIN,
-										 currentPartitionColumn,
-										 currentPartitionMethod);
+		return NULL;
 	}
+
+	/* shard interval lists must have 1-1 matching for local joins */
+	coPartitionedTables = CoPartitionedTables(currentAnchorTable->relationId, relationId);
+
+	if (!coPartitionedTables)
+	{
+		return NULL;
+	}
+
+	nextJoinNode = MakeJoinOrderNode(candidateTable, LOCAL_PARTITION_JOIN,
+									 currentPartitionColumn,
+									 currentPartitionMethod,
+									 currentAnchorTable);
+
 
 	return nextJoinNode;
 }
@@ -1258,6 +1285,7 @@ SinglePartitionJoin(JoinOrderNode *currentJoinNode, TableEntry *candidateTable,
 	JoinOrderNode *nextJoinNode = NULL;
 	Var *currentPartitionColumn = currentJoinNode->partitionColumn;
 	char currentPartitionMethod = currentJoinNode->partitionMethod;
+	TableEntry *currentAnchorTable = currentJoinNode->anchorTable;
 
 	Oid relationId = candidateTable->relationId;
 	uint32 tableId = candidateTable->rangeTableId;
@@ -1288,7 +1316,8 @@ SinglePartitionJoin(JoinOrderNode *currentJoinNode, TableEntry *candidateTable,
 		{
 			nextJoinNode = MakeJoinOrderNode(candidateTable, SINGLE_PARTITION_JOIN,
 											 currentPartitionColumn,
-											 currentPartitionMethod);
+											 currentPartitionMethod,
+											 currentAnchorTable);
 		}
 	}
 
@@ -1303,7 +1332,8 @@ SinglePartitionJoin(JoinOrderNode *currentJoinNode, TableEntry *candidateTable,
 		{
 			nextJoinNode = MakeJoinOrderNode(candidateTable, SINGLE_PARTITION_JOIN,
 											 candidatePartitionColumn,
-											 candidatePartitionMethod);
+											 candidatePartitionMethod,
+											 candidateTable);
 		}
 	}
 
@@ -1364,6 +1394,8 @@ DualPartitionJoin(JoinOrderNode *currentJoinNode, TableEntry *candidateTable,
 				  List *candidateShardList, List *applicableJoinClauses,
 				  JoinType joinType)
 {
+	/* Because of the dual partition, anchor table information got lost */
+	TableEntry *anchorTable = NULL;
 	JoinOrderNode *nextJoinNode = NULL;
 
 	OpExpr *joinClause = DualPartitionJoinClause(applicableJoinClauses);
@@ -1371,7 +1403,8 @@ DualPartitionJoin(JoinOrderNode *currentJoinNode, TableEntry *candidateTable,
 	{
 		Var *nextPartitionColumn = LeftColumn(joinClause);
 		nextJoinNode = MakeJoinOrderNode(candidateTable, DUAL_PARTITION_JOIN,
-										 nextPartitionColumn, REDISTRIBUTE_BY_HASH);
+										 nextPartitionColumn, REDISTRIBUTE_BY_HASH,
+										 anchorTable);
 	}
 
 	return nextJoinNode;
@@ -1423,7 +1456,8 @@ CartesianProduct(JoinOrderNode *currentJoinNode, TableEntry *candidateTable,
 {
 	JoinOrderNode *nextJoinNode = MakeJoinOrderNode(candidateTable, CARTESIAN_PRODUCT,
 													currentJoinNode->partitionColumn,
-													currentJoinNode->partitionMethod);
+													currentJoinNode->partitionMethod,
+													currentJoinNode->tableEntry);
 
 	return nextJoinNode;
 }
@@ -1432,7 +1466,7 @@ CartesianProduct(JoinOrderNode *currentJoinNode, TableEntry *candidateTable,
 /* Constructs and returns a join-order node with the given arguments */
 JoinOrderNode *
 MakeJoinOrderNode(TableEntry *tableEntry, JoinRuleType joinRuleType,
-				  Var *partitionColumn, char partitionMethod)
+				  Var *partitionColumn, char partitionMethod, TableEntry *anchorTable)
 {
 	JoinOrderNode *joinOrderNode = palloc0(sizeof(JoinOrderNode));
 	joinOrderNode->tableEntry = tableEntry;
@@ -1441,6 +1475,7 @@ MakeJoinOrderNode(TableEntry *tableEntry, JoinRuleType joinRuleType,
 	joinOrderNode->partitionColumn = partitionColumn;
 	joinOrderNode->partitionMethod = partitionMethod;
 	joinOrderNode->joinClauseList = NIL;
+	joinOrderNode->anchorTable = anchorTable;
 
 	return joinOrderNode;
 }
