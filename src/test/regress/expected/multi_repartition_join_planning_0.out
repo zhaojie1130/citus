@@ -1,5 +1,5 @@
 --
--- MULTI_LARGE_TABLE_PLANNING
+-- MULTI_REPARTITION_JOIN_PLANNING
 --
 -- Tests that cover large table join planning. Note that we explicitly start a
 -- transaction block here so that we don't emit debug messages with changing

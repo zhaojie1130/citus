@@ -18,10 +18,6 @@ SET citus.explain_all_tasks TO on;
 -- because were testing pruning here.
 SET citus.task_executor_type TO 'real-time';
 
--- Change configuration to treat lineitem and orders tables as large
-
-SET citus.large_table_shard_count TO 2;
-
 SELECT shardminvalue, shardmaxvalue from pg_dist_shard WHERE shardid = 290000;
 SELECT shardminvalue, shardmaxvalue from pg_dist_shard WHERE shardid = 290001;
 

@@ -655,19 +655,6 @@ RegisterCitusConfigVariables(void)
 		NULL, NULL, NULL);
 
 	DefineCustomIntVariable(
-		"citus.large_table_shard_count",
-		gettext_noop("The shard count threshold over which a table is considered large."),
-		gettext_noop("A distributed table is considered to be large if it has "
-					 "more shards than the value specified here. This largeness "
-					 "criteria is then used in picking a table join order during "
-					 "distributed query planning."),
-		&LargeTableShardCount,
-		4, 1, 10000,
-		PGC_USERSET,
-		0,
-		NULL, NULL, NULL);
-
-	DefineCustomIntVariable(
 		"citus.limit_clause_row_fetch_count",
 		gettext_noop("Number of rows to fetch per task for limit clause optimization."),
 		gettext_noop("Select queries get partitioned and executed as smaller "
