@@ -2261,6 +2261,20 @@ CoPartitionedTables(Oid firstRelationId, Oid secondRelationId)
 	}
 
 	/*
+	 * For hash distributed tables two tables are accepted as colocated only if
+	 * they have the same colocationId. Otherwise they may have same minimum and
+	 * maximum values for each shard interval, yet hash function may result with
+	 * different values for the same value. int vs bigint can be given as an
+	 * example.
+	 */
+	if (firstTableCache->partitionMethod == DISTRIBUTE_BY_HASH ||
+		secondTableCache->partitionMethod == DISTRIBUTE_BY_HASH)
+	{
+		return false;
+	}
+
+
+	/*
 	 * If not known to be colocated check if the remaining shards are
 	 * anyway. Do so by comparing the shard interval arrays that are sorted on
 	 * interval minimum values. Then it compares every shard interval in order
