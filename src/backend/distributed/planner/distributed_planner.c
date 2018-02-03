@@ -16,6 +16,7 @@
 #include "catalog/pg_type.h"
 #include "distributed/citus_nodefuncs.h"
 #include "distributed/citus_nodes.h"
+#include "distributed/deparse_shard_query.h"
 #include "distributed/insert_select_planner.h"
 #include "distributed/intermediate_results.h"
 #include "distributed/metadata_cache.h"
@@ -28,9 +29,11 @@
 #include "distributed/multi_master_planner.h"
 #include "distributed/multi_router_planner.h"
 #include "distributed/recursive_planning.h"
+#include "distributed/shard_pruning.h"
 #include "executor/executor.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "optimizer/clauses.h"
 #include "parser/parsetree.h"
 #include "parser/parse_type.h"
 #include "optimizer/cost.h"
@@ -50,6 +53,9 @@ static uint64 NextPlanId = 1;
 
 /* local function forward declarations */
 static bool NeedsDistributedPlanningWalker(Node *node, void *context);
+static PlannedStmt * TryCreateSimpleDistributedPlan(uint64 planId, Query *query,
+													ParamListInfo boundParams);
+static PlannedStmt * CreateEmptyPlannedStmt(Query *parse);
 static PlannedStmt * CreateDistributedPlan(uint64 planId, PlannedStmt *localPlan,
 										   Query *originalQuery, Query *query,
 										   ParamListInfo boundParams,
@@ -67,6 +73,7 @@ static void AssignRTEIdentities(Query *queryTree);
 static void AssignRTEIdentity(RangeTblEntry *rangeTableEntry, int rteIdentifier);
 static void AdjustPartitioningForDistributedPlanning(Query *parse,
 													 bool setPartitionedTablesInherited);
+static PlannedStmt * CreateEmptyPlannedStmt(Query *parse);
 static PlannedStmt * FinalizePlan(PlannedStmt *localPlan,
 								  DistributedPlan *distributedPlan);
 static PlannedStmt * FinalizeNonRouterPlan(PlannedStmt *localPlan,
@@ -140,14 +147,23 @@ distributed_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		 * planner relies on parse tree transformations made by postgres' planner.
 		 */
 
-		result = standard_planner(parse, cursorOptions, boundParams);
 
 		if (needsDistributedPlanning)
 		{
 			uint64 planId = NextPlanId++;
 
-			result = CreateDistributedPlan(planId, result, originalQuery, parse,
-										   boundParams, plannerRestrictionContext);
+			result = TryCreateSimpleDistributedPlan(planId, originalQuery, boundParams);
+
+			if (result == NULL)
+			{
+				result = standard_planner(parse, cursorOptions, boundParams);
+				result = CreateDistributedPlan(planId, result, originalQuery, parse,
+											   boundParams, plannerRestrictionContext);
+			}
+		}
+		else
+		{
+			result = standard_planner(parse, cursorOptions, boundParams);
 		}
 	}
 	PG_CATCH();
@@ -375,6 +391,139 @@ GetRTEIdentity(RangeTblEntry *rte)
 	Assert(list_length(rte->values_lists) == 1);
 
 	return linitial_int(rte->values_lists);
+}
+
+
+/*
+ * CreateEmtpyPlannedStmt returns a new PlannedStmt for the given query,
+ * without a planTree set.
+ */
+static PlannedStmt *
+CreateEmptyPlannedStmt(Query *parse)
+{
+	PlannedStmt *result = makeNode(PlannedStmt);
+
+	result->commandType = parse->commandType;
+	result->queryId = parse->queryId;
+	result->hasReturning = (parse->returningList != NIL);
+	result->hasModifyingCTE = parse->hasModifyingCTE;
+	result->canSetTag = parse->canSetTag;
+
+	result->transientPlan = false;
+	result->dependsOnRole = false;
+	result->parallelModeNeeded = false;
+	result->planTree = NULL;
+	result->rtable = NIL;
+	result->resultRelations = NIL;
+	result->nonleafResultRelations = NIL;
+	result->rootResultRelations = NIL;
+	result->subplans = NIL;
+	result->rewindPlanIDs = NULL;
+	result->rowMarks = NIL;
+	result->relationOids = NIL;
+	result->invalItems = NIL;
+	result->nParamExec = 0;
+
+	result->utilityStmt = parse->utilityStmt;
+	result->stmt_location = parse->stmt_location;
+	result->stmt_len = parse->stmt_len;
+
+	return result;
+}
+
+
+/*
+ * TryCreateSimpleDistributedPlan
+ */
+static PlannedStmt *
+TryCreateSimpleDistributedPlan(uint64 planId, Query *query, ParamListInfo boundParams)
+{
+	List *rtable = NIL;
+	RangeTblEntry *rangeTableEntry = NULL;
+	FromExpr *joinTree = NULL;
+	List *whereClauseList = NIL;
+	List *shardList = NIL;
+	ShardInterval *shardInterval = NULL;
+	RelationShard *relationShard = NULL;
+	List *relationShardList = NIL;
+	List *taskList = NIL;
+	List *placementList = NIL;
+	Job *job = NULL;
+	DistributedPlan *distributedPlan = NULL;
+	PlannedStmt *result = NULL;
+
+	/* TODO: add DML */
+	CmdType commandType = query->commandType;
+	if (commandType != CMD_SELECT)
+	{
+		return NULL;
+	}
+
+	if (query->hasSubLinks)
+	{
+		return NULL;
+	}
+
+	rtable = query->rtable;
+	if (list_length(rtable) != 1)
+	{
+		return NULL;
+	}
+
+	rangeTableEntry = (RangeTblEntry *) linitial(rtable);
+	if (rangeTableEntry->rtekind != RTE_RELATION)
+	{
+		return NULL;
+	}
+
+	joinTree = query->jointree;
+	if (joinTree == NULL)
+	{
+		return NULL;
+	}
+
+	whereClauseList = make_ands_implicit((Expr *) joinTree->quals);
+	shardList = PruneShards(rangeTableEntry->relid, 1, whereClauseList);
+	if (list_length(shardList) != 1)
+	{
+		return NULL;
+	}
+
+	shardInterval = (ShardInterval *) linitial(shardList);
+
+	relationShard = CitusMakeNode(RelationShard);
+	relationShard->relationId = shardInterval->relationId;
+	relationShard->shardId = shardInterval->shardId;
+	relationShardList = list_make1(relationShard);
+
+	UpdateRelationToShardNames((Node *) query, relationShardList);
+
+	placementList = FinalizedShardPlacementList(shardInterval->shardId);
+
+	taskList = SingleShardSelectTaskList(query, relationShardList, placementList,
+										 shardInterval->shardId);
+
+	job = CitusMakeNode(Job);
+	job->jobId = INVALID_JOB_ID;
+	job->jobQuery = query;
+	job->taskList = taskList;
+	job->dependedJobList = NIL;
+	job->subqueryPushdown = false;
+	job->requiresMasterEvaluation = false;
+	job->deferredPruning = false;
+
+	distributedPlan = CitusMakeNode(DistributedPlan);
+	distributedPlan->workerJob = job;
+	distributedPlan->masterQuery = NULL;
+	distributedPlan->routerExecutable = true;
+	distributedPlan->hasReturning = false;
+
+	result = CreateEmptyPlannedStmt(query);
+	result->planTree = makeNode(Plan);
+	result->planTree->targetlist = query->targetList;
+	result = FinalizePlan(result, distributedPlan);
+
+	return result;
 }
 
 

@@ -146,8 +146,6 @@ static List * get_all_actual_clauses(List *restrictinfo_list);
 static int CompareInsertValuesByShardId(const void *leftElement,
 										const void *rightElement);
 static uint64 GetInitialShardId(List *relationShardList);
-static List * SingleShardSelectTaskList(Query *query, List *relationShardList,
-										List *placementList, uint64 shardId);
 static List * SingleShardModifyTaskList(Query *query, List *relationShardList,
 										List *placementList, uint64 shardId);
 static List * MultiShardModifyTaskList(Query *originalQuery, List *relationShardList,
@@ -1438,7 +1436,7 @@ RouterJob(Query *originalQuery, RelationRestrictionContext *restrictionContext,
  * SingleShardSelectTaskList generates a task for single shard select query
  * and returns it as a list.
  */
-static List *
+List *
 SingleShardSelectTaskList(Query *query, List *relationShardList, List *placementList,
 						  uint64 shardId)
 {
