@@ -841,8 +841,17 @@ BuildDistTableCacheEntry(DistTableCacheEntry *cacheEntry)
 	/* note that for reference tables partitionKeyisNull is true */
 	if (!partitionKeyIsNull)
 	{
+		Var *partitionColumn = NULL;
+
 		oldContext = MemoryContextSwitchTo(CacheMemoryContext);
+
+		/* get the string representation of the partition column Var */
 		cacheEntry->partitionKeyString = TextDatumGetCString(partitionKeyDatum);
+
+		/* convert the string to a generic Var */
+		partitionColumn = (Var *) stringToNode(cacheEntry->partitionKeyString);
+		cacheEntry->partitionColumn = partitionColumn;
+
 		MemoryContextSwitchTo(oldContext);
 	}
 	else
@@ -884,12 +893,12 @@ BuildDistTableCacheEntry(DistTableCacheEntry *cacheEntry)
 	if (cacheEntry->partitionMethod == DISTRIBUTE_BY_HASH)
 	{
 		TypeCacheEntry *typeEntry = NULL;
-		Node *partitionNode = stringToNode(cacheEntry->partitionKeyString);
-		Var *partitionColumn = (Var *) partitionNode;
 		FmgrInfo *hashFunction = NULL;
 
-		Assert(IsA(partitionNode, Var));
-		typeEntry = lookup_type_cache(partitionColumn->vartype,
+		/* partition column should have been set above */
+		Assert(IsA(cacheEntry->partitionColumn, Var));
+
+		typeEntry = lookup_type_cache(cacheEntry->partitionColumn->vartype,
 									  TYPECACHE_HASH_PROC_FINFO);
 
 		hashFunction = MemoryContextAllocZero(CacheMemoryContext,
@@ -2696,6 +2705,12 @@ ResetDistTableCacheEntry(DistTableCacheEntry *cacheEntry)
 	{
 		pfree(cacheEntry->hashFunction);
 		cacheEntry->hashFunction = NULL;
+	}
+
+	if (cacheEntry->partitionColumn != NULL)
+	{
+		pfree(cacheEntry->partitionColumn);
+		cacheEntry->partitionColumn = NULL;
 	}
 
 	if (cacheEntry->shardIntervalArrayLength == 0)

@@ -1556,7 +1556,6 @@ Var *
 DistPartitionKey(Oid relationId)
 {
 	DistTableCacheEntry *partitionEntry = DistributedTableCacheEntry(relationId);
-	Node *variableNode = NULL;
 	Var *partitionKey = NULL;
 
 	/* reference tables do not have partition column */
@@ -1565,11 +1564,8 @@ DistPartitionKey(Oid relationId)
 		return NULL;
 	}
 
-	/* now obtain partition key and build the var node */
-	variableNode = stringToNode(partitionEntry->partitionKeyString);
-
-	partitionKey = (Var *) variableNode;
-	Assert(IsA(variableNode, Var));
+	partitionKey = copyObject(partitionEntry->partitionColumn);
+	Assert(IsA(partitionKey, Var));
 
 	return partitionKey;
 }
