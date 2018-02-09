@@ -156,7 +156,8 @@ test: multi_transaction_recovery
 # multi_copy creates hash and range-partitioned tables and performs COPY
 # multi_router_planner creates hash partitioned tables.
 # ---------
-test: multi_copy multi_router_planner
+test: multi_copy 
+test: multi_router_planner
 
 # ----------
 # multi_large_shardid loads more lineitem data using high shard identifiers
