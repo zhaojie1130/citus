@@ -22,12 +22,15 @@ FROM
 
 -- single-shard UPDATE in CTE
 WITH basic_update AS (
-	UPDATE users_table SET value_3=42 WHERE user_id=0 RETURNING *
+	UPDATE users_table SET value_3=41 WHERE user_id=1 RETURNING *
 )
 SELECT
 	*
 FROM
-	basic_update;
+	basic_update
+ORDER BY
+	user_id,
+	time;
 
 -- multi-shard UPDATE in CTE
 WITH basic_update AS (
@@ -36,11 +39,14 @@ WITH basic_update AS (
 SELECT
 	*
 FROM
-	basic_update;
+	basic_update
+ORDER BY
+	user_id,
+	time;
 
 -- single-shard DELETE in CTE
 WITH basic_delete AS (
-	DELETE FROM users_table WHERE user_id=42 RETURNING *
+	DELETE FROM users_table WHERE user_id=6 RETURNING *
 )
 SELECT
 	*
@@ -49,7 +55,7 @@ FROM
 
 -- multi-shard DELETE in CTE
 WITH basic_delete AS (
-	DELETE FROM users_table WHERE value_2=42 RETURNING *
+	DELETE FROM users_table WHERE value_3=41 RETURNING *
 )
 SELECT
 	*
@@ -58,7 +64,7 @@ FROM
 
 -- INSERT...SELECT query in CTE
 WITH copy_table AS (
-	INSERT INTO users_table SELECT * FROM users_table RETURNING *
+	INSERT INTO users_table SELECT * FROM users_table WHERE user_id = 0 OR user_id = 3 RETURNING *
 )
 SELECT
 	*
