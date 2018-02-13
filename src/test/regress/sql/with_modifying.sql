@@ -18,7 +18,9 @@ WITH basic_insert AS (
 SELECT
 	*
 FROM
-	basic_insert;
+	basic_insert
+ORDER BY
+	user_id;
 
 -- single-shard UPDATE in CTE
 WITH basic_update AS (
@@ -30,7 +32,8 @@ FROM
 	basic_update
 ORDER BY
 	user_id,
-	time;
+	time
+LIMIT 10;
 
 -- multi-shard UPDATE in CTE
 WITH basic_update AS (
@@ -42,7 +45,8 @@ FROM
 	basic_update
 ORDER BY
 	user_id,
-	time;
+	time
+LIMIT 10;
 
 -- single-shard DELETE in CTE
 WITH basic_delete AS (
@@ -51,7 +55,11 @@ WITH basic_delete AS (
 SELECT
 	*
 FROM
-	basic_delete;
+	basic_delete
+ORDER BY
+	user_id,
+	time
+LIMIT 10;
 
 -- multi-shard DELETE in CTE
 WITH basic_delete AS (
@@ -60,7 +68,11 @@ WITH basic_delete AS (
 SELECT
 	*
 FROM
-	basic_delete;
+	basic_delete
+ORDER BY
+	user_id,
+	time
+LIMIT 10;
 
 -- INSERT...SELECT query in CTE
 WITH copy_table AS (
@@ -69,7 +81,11 @@ WITH copy_table AS (
 SELECT
 	*
 FROM
-	copy_table;
+	copy_table
+ORDER BY
+	user_id,
+	time
+LIMIT 10;
 
 -- CTEs prior to INSERT...SELECT via the coordinator should work
 WITH cte AS (
