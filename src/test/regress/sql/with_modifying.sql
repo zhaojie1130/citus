@@ -11,6 +11,9 @@ CREATE TABLE with_modifying.users_table (LIKE public.users_table INCLUDING ALL);
 SELECT create_distributed_table('with_modifying.users_table', 'user_id');
 INSERT INTO with_modifying.users_table SELECT * FROM public.users_table;
 
+CREATE TABLE with_modifying.summary_table (id int, counter int);
+SELECT create_distributed_table('summary_table', 'id');
+
 -- basic insert query in CTE
 WITH basic_insert AS (
 	INSERT INTO users_table VALUES (1), (2), (3) RETURNING *
@@ -142,5 +145,49 @@ WITH cte AS (
 	INSERT INTO modify_table (SELECT user_id FROM events_table) RETURNING *
 )
 SELECT * FROM cte;
+
+WITH user_data AS (
+	SELECT user_id, value_2 FROM users_table
+)
+INSERT INTO modify_table SELECT * FROM user_data;
+
+WITH raw_data AS (
+	DELETE FROM modify_table RETURNING *
+)
+INSERT INTO summary_table SELECT id, COUNT(*) AS counter FROM raw_data GROUP BY id;
+
+SELECT * FROM summary_table ORDER BY id;
+SELECT COUNT(*) FROM modify_table;
+
+INSERT INTO modify_table VALUES (1,1), (2, 2), (3,3);
+
+WITH raw_data AS (
+	DELETE FROM modify_table RETURNING *
+)
+INSERT INTO summary_table SELECT id, COUNT(*) AS counter FROM raw_data GROUP BY id;
+
+SELECT * FROM summary_table ORDER BY id, counter;
+SELECT COUNT(*) FROM modify_table;
+
+-- merge rows in the summary_table
+WITH raw_data AS (
+	DELETE FROM summary_table RETURNING *
+)
+INSERT INTO summary_table SELECT id, SUM(counter) AS counter FROM raw_data GROUP BY id;
+
+SELECT * FROM summary_table ORDER BY id;
+
+-- check modifiying CTEs inside a transaction
+INSERT INTO modify_table VALUES (1,1), (2, 2), (3,3);
+
+BEGIN;
+WITH raw_data AS (
+	DELETE FROM summary_table RETURNING *
+)
+INSERT INTO summary_table SELECT id, SUM(counter) AS counter FROM raw_data GROUP BY id;
+ROLLBACK;
+
+SELECT COUNT(*) FROM modify_table;
+SELECT * FROM summary_table ORDER BY id, counter;
 
 DROP SCHEMA with_modifying CASCADE;

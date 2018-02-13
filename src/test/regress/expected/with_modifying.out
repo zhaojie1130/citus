@@ -17,6 +17,13 @@ SELECT create_distributed_table('with_modifying.users_table', 'user_id');
 (1 row)
 
 INSERT INTO with_modifying.users_table SELECT * FROM public.users_table;
+CREATE TABLE with_modifying.summary_table (id int, counter int);
+SELECT create_distributed_table('summary_table', 'id');
+ create_distributed_table 
+--------------------------
+ 
+(1 row)
+
 -- basic insert query in CTE
 WITH basic_insert AS (
 	INSERT INTO users_table VALUES (1), (2), (3) RETURNING *
@@ -212,7 +219,93 @@ WITH cte AS (
 )
 SELECT * FROM cte;
 ERROR:  RETURNING is not supported in INSERT ... SELECT via coordinator
+WITH user_data AS (
+	SELECT user_id, value_2 FROM users_table
+)
+INSERT INTO modify_table SELECT * FROM user_data;
+WITH raw_data AS (
+	DELETE FROM modify_table RETURNING *
+)
+INSERT INTO summary_table SELECT id, COUNT(*) AS counter FROM raw_data GROUP BY id;
+SELECT * FROM summary_table ORDER BY id;
+ id | counter 
+----+---------
+  2 |     153
+  3 |     184
+  4 |     160
+  5 |     170
+(4 rows)
+
+SELECT COUNT(*) FROM modify_table;
+ count 
+-------
+     0
+(1 row)
+
+INSERT INTO modify_table VALUES (1,1), (2, 2), (3,3);
+WITH raw_data AS (
+	DELETE FROM modify_table RETURNING *
+)
+INSERT INTO summary_table SELECT id, COUNT(*) AS counter FROM raw_data GROUP BY id;
+SELECT * FROM summary_table ORDER BY id, counter;
+ id | counter 
+----+---------
+  1 |       1
+  2 |       1
+  2 |     153
+  3 |       1
+  3 |     184
+  4 |     160
+  5 |     170
+(7 rows)
+
+SELECT COUNT(*) FROM modify_table;
+ count 
+-------
+     0
+(1 row)
+
+-- merge rows in the summary_table
+WITH raw_data AS (
+	DELETE FROM summary_table RETURNING *
+)
+INSERT INTO summary_table SELECT id, SUM(counter) AS counter FROM raw_data GROUP BY id;
+SELECT * FROM summary_table ORDER BY id;
+ id | counter 
+----+---------
+  1 |       1
+  2 |     154
+  3 |     185
+  4 |     160
+  5 |     170
+(5 rows)
+
+-- check modifiying CTEs inside a transaction
+INSERT INTO modify_table VALUES (1,1), (2, 2), (3,3);
+BEGIN;
+WITH raw_data AS (
+	DELETE FROM summary_table RETURNING *
+)
+INSERT INTO summary_table SELECT id, SUM(counter) AS counter FROM raw_data GROUP BY id;
+ROLLBACK;
+SELECT COUNT(*) FROM modify_table;
+ count 
+-------
+     3
+(1 row)
+
+SELECT * FROM summary_table ORDER BY id, counter;
+ id | counter 
+----+---------
+  1 |       1
+  2 |     154
+  3 |     185
+  4 |     160
+  5 |     170
+(5 rows)
+
 DROP SCHEMA with_modifying CASCADE;
-NOTICE:  drop cascades to 2 other objects
+NOTICE:  drop cascades to 3 other objects
 DETAIL:  drop cascades to table modify_table
 drop cascades to table users_table
+drop cascades to table summary_table
