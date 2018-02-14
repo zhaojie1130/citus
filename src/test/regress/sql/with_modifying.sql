@@ -14,6 +14,9 @@ INSERT INTO with_modifying.users_table SELECT * FROM public.users_table;
 CREATE TABLE with_modifying.summary_table (id int, counter int);
 SELECT create_distributed_table('summary_table', 'id');
 
+CREATE TABLE with_modifying.anchor_table (id int);
+SELECT create_reference_table('anchor_table');
+
 -- basic insert query in CTE
 WITH basic_insert AS (
 	INSERT INTO users_table VALUES (1), (2), (3) RETURNING *
@@ -169,37 +172,16 @@ INSERT INTO summary_table SELECT id, COUNT(*) AS counter FROM raw_data GROUP BY 
 SELECT * FROM summary_table ORDER BY id, counter;
 SELECT COUNT(*) FROM modify_table;
 
--- merge rows in the summary_table
-WITH summary_data AS (
-	DELETE FROM summary_table RETURNING *
+WITH insert_reference AS (
+	INSERT INTO anchor_table VALUES (1), (2) RETURNING *
 )
-INSERT INTO summary_table SELECT id, SUM(counter) AS counter FROM summary_data GROUP BY id;
+SELECT id FROM insert_reference ORDER BY id;
 
-SELECT * FROM summary_table ORDER BY id;
-
--- check modifiying CTEs inside a transaction
-INSERT INTO modify_table VALUES (1,1), (2, 2), (3,3);
-
-BEGIN;
-WITH summary_data AS (
-	DELETE FROM summary_table RETURNING *
-)
-INSERT INTO summary_table SELECT id, SUM(counter) AS counter FROM summary_data GROUP BY id;
-ROLLBACK;
-
-SELECT COUNT(*) FROM modify_table;
-SELECT * FROM summary_table ORDER BY id, counter;
-
-CREATE TABLE with_modifying.anchor_table (id int);
-SELECT create_distributed_table('anchor_table', 'id');
-
-INSERT INTO anchor_table VALUES (1), (2);
-
-WITH raw_data AS (
-	DELETE FROM modify_table RETURNING *
+WITH anchor_data AS (
+	SELECT * FROM anchor_table
 ),
-anchor_data AS (
-	DELETE FROM anchor_table RETURNING *
+raw_data AS (
+	DELETE FROM modify_table RETURNING *
 ),
 summary_data AS (
 	DELETE FROM summary_table RETURNING *
@@ -222,6 +204,62 @@ WITH added_data AS (
 ),
 raw_data AS (
 	DELETE FROM modify_table WHERE id = 1 AND val = (SELECT MAX(val) FROM added_data) RETURNING *
+)
+INSERT INTO summary_table SELECT id, COUNT(*) AS counter FROM raw_data GROUP BY id;
+
+SELECT COUNT(*) FROM modify_table;
+SELECT * FROM summary_table ORDER BY id, counter;
+
+-- Merge rows in the summary_table
+WITH summary_data AS (
+	DELETE FROM summary_table RETURNING *
+)
+INSERT INTO summary_table SELECT id, SUM(counter) AS counter FROM summary_data GROUP BY id;
+
+SELECT * FROM summary_table ORDER BY id, counter;
+SELECT * FROM modify_table ORDER BY id, val;
+SELECT * FROM anchor_table ORDER BY id;
+
+-- Check modifiying CTEs inside a transaction
+BEGIN;
+
+WITH raw_data AS (
+	DELETE FROM modify_table RETURNING *
+)
+INSERT INTO summary_table SELECT id, COUNT(*) AS counter FROM raw_data GROUP BY id;
+
+WITH insert_reference AS (
+	INSERT INTO anchor_table VALUES (3), (4) RETURNING *
+)
+SELECT id FROM insert_reference ORDER BY id;
+
+SELECT * FROM summary_table ORDER BY id, counter;
+SELECT * FROM modify_table ORDER BY id, val;
+SELECT * FROM anchor_table ORDER BY id;
+
+ROLLBACK;
+
+SELECT * FROM summary_table ORDER BY id, counter;
+SELECT * FROM modify_table ORDER BY id, val;
+SELECT * FROM anchor_table ORDER BY id;
+
+-- Test with replication factor 2
+SET citus.shard_replication_factor to 2;
+
+DROP TABLE modify_table;
+CREATE TABLE with_modifying.modify_table (id int, val int);
+SELECT create_distributed_table('modify_table', 'id');
+INSERT INTO with_modifying.modify_table SELECT user_id, value_1 FROM public.users_table;
+
+DROP TABLE summary_table;
+CREATE TABLE with_modifying.summary_table (id int, counter int);
+SELECT create_distributed_table('summary_table', 'id');
+
+SELECT COUNT(*) FROM modify_table;
+SELECT * FROM summary_table ORDER BY id, counter;
+
+WITH raw_data AS (
+	DELETE FROM modify_table RETURNING *
 )
 INSERT INTO summary_table SELECT id, COUNT(*) AS counter FROM raw_data GROUP BY id;
 
