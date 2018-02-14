@@ -190,4 +190,34 @@ ROLLBACK;
 SELECT COUNT(*) FROM modify_table;
 SELECT * FROM summary_table ORDER BY id, counter;
 
+CREATE TABLE with_modifying.anchor_table (id int);
+SELECT create_distributed_table('anchor_table', 'id');
+
+INSERT INTO anchor_table VALUES (1), (2);
+
+WITH raw_data AS (
+	DELETE FROM modify_table RETURNING *
+),
+anchor_data AS (
+	DELETE FROM anchor_table RETURNING *
+)
+INSERT INTO
+	summary_table
+SELECT raw_data.id, COUNT(*) AS counter FROM raw_data, anchor_data
+	WHERE raw_data.id = anchor_data.id GROUP BY raw_data.id;
+
+SELECT COUNT(*) FROM modify_table;
+SELECT * FROM summary_table ORDER BY id, counter;
+
+WITH added_data AS (
+	INSERT INTO modify_table VALUES (1,1), (1,3), (2, 2), (3,3) RETURNING *
+),
+raw_data AS (
+	DELETE FROM modify_table WHERE id = 1 AND val = (SELECT MAX(val) FROM added_data) RETURNING *
+)
+INSERT INTO summary_table SELECT id, COUNT(*) AS counter FROM raw_data GROUP BY id;
+
+SELECT COUNT(*) FROM modify_table;
+SELECT * FROM summary_table ORDER BY id, counter;
+
 DROP SCHEMA with_modifying CASCADE;
