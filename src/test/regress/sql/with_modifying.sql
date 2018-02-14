@@ -170,10 +170,10 @@ SELECT * FROM summary_table ORDER BY id, counter;
 SELECT COUNT(*) FROM modify_table;
 
 -- merge rows in the summary_table
-WITH raw_data AS (
+WITH summary_data AS (
 	DELETE FROM summary_table RETURNING *
 )
-INSERT INTO summary_table SELECT id, SUM(counter) AS counter FROM raw_data GROUP BY id;
+INSERT INTO summary_table SELECT id, SUM(counter) AS counter FROM summary_data GROUP BY id;
 
 SELECT * FROM summary_table ORDER BY id;
 
@@ -181,10 +181,10 @@ SELECT * FROM summary_table ORDER BY id;
 INSERT INTO modify_table VALUES (1,1), (2, 2), (3,3);
 
 BEGIN;
-WITH raw_data AS (
+WITH summary_data AS (
 	DELETE FROM summary_table RETURNING *
 )
-INSERT INTO summary_table SELECT id, SUM(counter) AS counter FROM raw_data GROUP BY id;
+INSERT INTO summary_table SELECT id, SUM(counter) AS counter FROM summary_data GROUP BY id;
 ROLLBACK;
 
 SELECT COUNT(*) FROM modify_table;
@@ -200,11 +200,19 @@ WITH raw_data AS (
 ),
 anchor_data AS (
 	DELETE FROM anchor_table RETURNING *
+),
+summary_data AS (
+	DELETE FROM summary_table RETURNING *
 )
 INSERT INTO
 	summary_table
-SELECT raw_data.id, COUNT(*) AS counter FROM raw_data, anchor_data
-	WHERE raw_data.id = anchor_data.id GROUP BY raw_data.id;
+SELECT id, SUM(counter) FROM (
+	(SELECT raw_data.id, COUNT(*) AS counter FROM raw_data, anchor_data
+		WHERE raw_data.id = anchor_data.id GROUP BY raw_data.id)
+	UNION ALL
+	(SELECT * FROM summary_data)) AS all_rows
+GROUP BY
+	id;
 
 SELECT COUNT(*) FROM modify_table;
 SELECT * FROM summary_table ORDER BY id, counter;

@@ -266,10 +266,10 @@ SELECT COUNT(*) FROM modify_table;
 (1 row)
 
 -- merge rows in the summary_table
-WITH raw_data AS (
+WITH summary_data AS (
 	DELETE FROM summary_table RETURNING *
 )
-INSERT INTO summary_table SELECT id, SUM(counter) AS counter FROM raw_data GROUP BY id;
+INSERT INTO summary_table SELECT id, SUM(counter) AS counter FROM summary_data GROUP BY id;
 SELECT * FROM summary_table ORDER BY id;
  id | counter 
 ----+---------
@@ -283,10 +283,10 @@ SELECT * FROM summary_table ORDER BY id;
 -- check modifiying CTEs inside a transaction
 INSERT INTO modify_table VALUES (1,1), (2, 2), (3,3);
 BEGIN;
-WITH raw_data AS (
+WITH summary_data AS (
 	DELETE FROM summary_table RETURNING *
 )
-INSERT INTO summary_table SELECT id, SUM(counter) AS counter FROM raw_data GROUP BY id;
+INSERT INTO summary_table SELECT id, SUM(counter) AS counter FROM summary_data GROUP BY id;
 ROLLBACK;
 SELECT COUNT(*) FROM modify_table;
  count 
@@ -317,11 +317,19 @@ WITH raw_data AS (
 ),
 anchor_data AS (
 	DELETE FROM anchor_table RETURNING *
+),
+summary_data AS (
+	DELETE FROM summary_table RETURNING *
 )
 INSERT INTO
 	summary_table
-SELECT raw_data.id, COUNT(*) AS counter FROM raw_data, anchor_data
-	WHERE raw_data.id = anchor_data.id GROUP BY raw_data.id;
+SELECT id, SUM(counter) FROM (
+	(SELECT raw_data.id, COUNT(*) AS counter FROM raw_data, anchor_data
+		WHERE raw_data.id = anchor_data.id GROUP BY raw_data.id)
+	UNION ALL
+	(SELECT * FROM summary_data)) AS all_rows
+GROUP BY
+	id;
 SELECT COUNT(*) FROM modify_table;
  count 
 -------
@@ -331,14 +339,12 @@ SELECT COUNT(*) FROM modify_table;
 SELECT * FROM summary_table ORDER BY id, counter;
  id | counter 
 ----+---------
-  1 |       1
-  1 |       1
-  2 |       1
-  2 |     154
+  1 |       2
+  2 |     155
   3 |     185
   4 |     160
   5 |     170
-(7 rows)
+(5 rows)
 
 WITH added_data AS (
 	INSERT INTO modify_table VALUES (1,1), (1,3), (2, 2), (3,3) RETURNING *
@@ -357,14 +363,12 @@ SELECT * FROM summary_table ORDER BY id, counter;
  id | counter 
 ----+---------
   1 |       1
-  1 |       1
-  1 |       1
-  2 |       1
-  2 |     154
+  1 |       2
+  2 |     155
   3 |     185
   4 |     160
   5 |     170
-(8 rows)
+(6 rows)
 
 DROP SCHEMA with_modifying CASCADE;
 NOTICE:  drop cascades to 4 other objects
