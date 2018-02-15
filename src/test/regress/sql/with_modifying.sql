@@ -220,6 +220,15 @@ SELECT * FROM summary_table ORDER BY id, counter;
 SELECT * FROM modify_table ORDER BY id, val;
 SELECT * FROM anchor_table ORDER BY id;
 
+-- Check an unsupported query type
+WITH added_data AS (
+	INSERT INTO modify_table VALUES (1,1), (2, 2), (3,3) RETURNING *
+),
+raw_data AS (
+	DELETE FROM modify_table WHERE id = (SELECT min(id) FROM added_data) RETURNING *
+)
+INSERT INTO summary_table SELECT id, COUNT(*) AS counter FROM raw_data GROUP BY id;
+
 -- Check modifiying CTEs inside a transaction
 BEGIN;
 
