@@ -200,7 +200,7 @@ SELECT COUNT(*) FROM modify_table;
 SELECT * FROM summary_table ORDER BY id, counter;
 
 WITH added_data AS (
-	INSERT INTO modify_table VALUES (1,1), (1,3), (2, 2), (3,3) RETURNING *
+	INSERT INTO modify_table VALUES (1,2), (1,6), (2,4), (3,6) RETURNING *
 ),
 raw_data AS (
 	DELETE FROM modify_table WHERE id = 1 AND val = (SELECT MAX(val) FROM added_data) RETURNING *
@@ -251,6 +251,37 @@ ROLLBACK;
 SELECT * FROM summary_table ORDER BY id, counter;
 SELECT * FROM modify_table ORDER BY id, val;
 SELECT * FROM anchor_table ORDER BY id;
+
+-- Test delete with subqueries
+WITH deleted_rows AS (
+	DELETE FROM modify_table WHERE id IN (SELECT id FROM modify_table WHERE id = 1) RETURNING *
+)
+SELECT * FROM deleted_rows;
+
+WITH deleted_rows AS (
+	DELETE FROM modify_table WHERE id IN (SELECT id FROM modify_table WHERE val = 4) RETURNING *
+)
+SELECT * FROM deleted_rows;
+
+WITH deleted_rows AS (
+	DELETE FROM modify_table WHERE id IN (2) RETURNING *
+)
+SELECT * FROM deleted_rows;
+
+WITH deleted_rows AS (
+	DELETE FROM modify_table WHERE val IN (SELECT val FROM modify_table WHERE id = 3) RETURNING *
+)
+SELECT * FROM deleted_rows;
+
+WITH deleted_rows AS (
+	DELETE FROM modify_table WHERE val IN (6) RETURNING *
+)
+SELECT * FROM deleted_rows;
+
+WITH deleted_rows AS (
+	DELETE FROM modify_table WHERE ctid IN (SELECT ctid FROM modify_table WHERE id = 1) RETURNING *
+)
+SELECT * FROM deleted_rows;
 
 -- Test with replication factor 2
 SET citus.shard_replication_factor to 2;

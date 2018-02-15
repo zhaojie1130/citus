@@ -317,7 +317,7 @@ SELECT * FROM summary_table ORDER BY id, counter;
 (5 rows)
 
 WITH added_data AS (
-	INSERT INTO modify_table VALUES (1,1), (1,3), (2, 2), (3,3) RETURNING *
+	INSERT INTO modify_table VALUES (1,2), (1,6), (2,4), (3,6) RETURNING *
 ),
 raw_data AS (
 	DELETE FROM modify_table WHERE id = 1 AND val = (SELECT MAX(val) FROM added_data) RETURNING *
@@ -358,9 +358,9 @@ SELECT * FROM summary_table ORDER BY id, counter;
 SELECT * FROM modify_table ORDER BY id, val;
  id | val 
 ----+-----
-  1 |   1
-  2 |   2
-  3 |   3
+  1 |   2
+  2 |   4
+  3 |   6
 (3 rows)
 
 SELECT * FROM anchor_table ORDER BY id;
@@ -437,9 +437,9 @@ SELECT * FROM summary_table ORDER BY id, counter;
 SELECT * FROM modify_table ORDER BY id, val;
  id | val 
 ----+-----
-  1 |   1
-  2 |   2
-  3 |   3
+  1 |   2
+  2 |   4
+  3 |   6
 (3 rows)
 
 SELECT * FROM anchor_table ORDER BY id;
@@ -449,6 +449,52 @@ SELECT * FROM anchor_table ORDER BY id;
   2
 (2 rows)
 
+-- Test delete with subqueries
+WITH deleted_rows AS (
+	DELETE FROM modify_table WHERE id IN (SELECT id FROM modify_table WHERE id = 1) RETURNING *
+)
+SELECT * FROM deleted_rows;
+ id | val 
+----+-----
+  1 |   2
+(1 row)
+
+WITH deleted_rows AS (
+	DELETE FROM modify_table WHERE id IN (SELECT id FROM modify_table WHERE val = 4) RETURNING *
+)
+SELECT * FROM deleted_rows;
+ERROR:  subqueries are not supported in modifications across multiple shards
+DETAIL:  Consider using an equality filter on partition column "id" to target a single shard.
+WITH deleted_rows AS (
+	DELETE FROM modify_table WHERE id IN (2) RETURNING *
+)
+SELECT * FROM deleted_rows;
+ id | val 
+----+-----
+  2 |   4
+(1 row)
+
+WITH deleted_rows AS (
+	DELETE FROM modify_table WHERE val IN (SELECT val FROM modify_table WHERE id = 3) RETURNING *
+)
+SELECT * FROM deleted_rows;
+ERROR:  subqueries are not supported in modifications across multiple shards
+DETAIL:  Consider using an equality filter on partition column "id" to target a single shard.
+WITH deleted_rows AS (
+	DELETE FROM modify_table WHERE val IN (6) RETURNING *
+)
+SELECT * FROM deleted_rows;
+ id | val 
+----+-----
+  3 |   6
+(1 row)
+
+WITH deleted_rows AS (
+	DELETE FROM modify_table WHERE ctid IN (SELECT ctid FROM modify_table WHERE id = 1) RETURNING *
+)
+SELECT * FROM deleted_rows;
+ERROR:  subqueries are not supported in modifications across multiple shards
+DETAIL:  Consider using an equality filter on partition column "id" to target a single shard.
 -- Test with replication factor 2
 SET citus.shard_replication_factor to 2;
 DROP TABLE modify_table;
