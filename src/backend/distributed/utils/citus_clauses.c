@@ -10,8 +10,10 @@
 
 #include "distributed/citus_clauses.h"
 #include "distributed/insert_select_planner.h"
+#include "distributed/metadata_cache.h"
 #include "distributed/multi_router_planner.h"
 
+#include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
 #include "executor/executor.h"
 #include "nodes/makefuncs.h"
@@ -39,6 +41,74 @@ static Node * PartiallyEvaluateExpressionMutator(Node *expression,
 static Expr * citus_evaluate_expr(Expr *expr, Oid result_type, int32 result_typmod,
 								  Oid result_collation, PlanState *planState);
 
+static bool contain_mutable_functions_citus(Node *clause);
+static bool contain_mutable_functions_checker_citus(Oid func_id, void *context);
+static bool contain_mutable_functions_walker_citus(Node *node, void *context);
+
+
+static bool
+contain_mutable_functions_citus(Node *clause)
+{
+	return contain_mutable_functions_walker_citus(clause, NULL);
+}
+
+static bool
+contain_mutable_functions_checker_citus(Oid func_id, void *context)
+{
+	if (func_id == CitusReadIntermediateResultFuncId())
+	{
+		return false;
+	}
+	else
+	{
+		return (func_volatile(func_id) != PROVOLATILE_IMMUTABLE);
+	}
+}
+
+static bool
+contain_mutable_functions_walker_citus(Node *node, void *context)
+{
+	if (node == NULL)
+		return false;
+	/* Check for mutable functions in node itself */
+	if (check_functions_in_node(node, contain_mutable_functions_checker_citus,
+								context))
+		return true;
+
+	if (IsA(node, SQLValueFunction))
+	{
+		/* all variants of SQLValueFunction are stable */
+		return true;
+	}
+
+	if (IsA(node, NextValueExpr))
+	{
+		/* NextValueExpr is volatile */
+		return true;
+	}
+
+	/*
+	 * It should be safe to treat MinMaxExpr as immutable, because it will
+	 * depend on a non-cross-type btree comparison function, and those should
+	 * always be immutable.  Treating XmlExpr as immutable is more dubious,
+	 * and treating CoerceToDomain as immutable is outright dangerous.  But we
+	 * have done so historically, and changing this would probably cause more
+	 * problems than it would fix.  In practice, if you have a non-immutable
+	 * domain constraint you are in for pain anyhow.
+	 */
+
+	/* Recurse to check arguments */
+	if (IsA(node, Query))
+	{
+		/* Recurse into subselects */
+		return query_tree_walker((Query *) node,
+								 contain_mutable_functions_walker_citus,
+								 context, 0);
+	}
+	return expression_tree_walker(node, contain_mutable_functions_walker_citus,
+								  context);
+}
+
 
 /*
  * Whether the executor needs to reparse and try to execute this query.
@@ -54,7 +124,7 @@ RequiresMasterEvaluation(Query *query)
 	{
 		TargetEntry *targetEntry = (TargetEntry *) lfirst(targetEntryCell);
 
-		if (contain_mutable_functions((Node *) targetEntry->expr))
+		if (contain_mutable_functions_citus((Node *) targetEntry->expr))
 		{
 			return true;
 		}
@@ -73,7 +143,7 @@ RequiresMasterEvaluation(Query *query)
 		}
 		else if (rte->rtekind == RTE_VALUES)
 		{
-			if (contain_mutable_functions((Node *) rte->values_lists))
+			if (contain_mutable_functions_citus((Node *) rte->values_lists))
 			{
 				return true;
 			}
@@ -92,7 +162,10 @@ RequiresMasterEvaluation(Query *query)
 
 	if (query->jointree && query->jointree->quals)
 	{
-		return contain_mutable_functions((Node *) query->jointree->quals);
+		if (contain_mutable_functions_citus((Node *) query->jointree->quals))
+		{
+			return true;
+		}
 	}
 
 	return false;
