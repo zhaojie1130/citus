@@ -52,6 +52,7 @@ contain_mutable_functions_citus(Node *clause)
 	return contain_mutable_functions_walker_citus(clause, NULL);
 }
 
+
 static bool
 contain_mutable_functions_checker_citus(Oid func_id, void *context)
 {
@@ -65,15 +66,21 @@ contain_mutable_functions_checker_citus(Oid func_id, void *context)
 	}
 }
 
+
 static bool
 contain_mutable_functions_walker_citus(Node *node, void *context)
 {
 	if (node == NULL)
+	{
 		return false;
+	}
+
 	/* Check for mutable functions in node itself */
 	if (check_functions_in_node(node, contain_mutable_functions_checker_citus,
 								context))
+	{
 		return true;
+	}
 
 	if (IsA(node, SQLValueFunction))
 	{
