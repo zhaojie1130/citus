@@ -495,6 +495,37 @@ WITH deleted_rows AS (
 SELECT * FROM deleted_rows;
 ERROR:  subqueries are not supported in modifications across multiple shards
 DETAIL:  Consider using an equality filter on partition column "id" to target a single shard.
+WITH added_data AS (
+	INSERT INTO modify_table VALUES (1,2), (1,6) RETURNING *
+),
+select_data AS (
+	SELECT * FROM added_data WHERE id = 1
+),
+raw_data AS (
+	DELETE FROM modify_table WHERE id = 1 AND ctid IN (SELECT ctid FROM select_data) RETURNING val
+)
+SELECT * FROM raw_data ORDER BY val;
+ val 
+-----
+   2
+   6
+(2 rows)
+
+WITH added_data AS (
+	INSERT INTO modify_table VALUES (1, trunc(10 * random())), (1, trunc(random())) RETURNING *
+),
+select_data AS (
+	SELECT val, now() FROM added_data WHERE id = 1
+),
+raw_data AS (
+	DELETE FROM modify_table WHERE id = 1 AND val IN (SELECT val FROM select_data) RETURNING *
+)
+SELECT count(*) FROM raw_data;
+ count 
+-------
+     2
+(1 row)
+
 -- Test with replication factor 2
 SET citus.shard_replication_factor to 2;
 DROP TABLE modify_table;
