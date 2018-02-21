@@ -220,14 +220,19 @@ SELECT * FROM summary_table ORDER BY id, counter;
 SELECT * FROM modify_table ORDER BY id, val;
 SELECT * FROM anchor_table ORDER BY id;
 
--- Check an unsupported query type
-WITH added_data AS (
-	INSERT INTO modify_table VALUES (1,1), (2, 2), (3,3) RETURNING *
+INSERT INTO modify_table VALUES (11, 1), (12, 2), (13, 3);
+WITH select_data AS (
+	SELECT * FROM modify_table
 ),
 raw_data AS (
-	DELETE FROM modify_table WHERE id = (SELECT min(id) FROM added_data) RETURNING *
+	DELETE FROM modify_table WHERE id >= (SELECT min(id) FROM select_data WHERE id > 10) RETURNING *
 )
 INSERT INTO summary_table SELECT id, COUNT(*) AS counter FROM raw_data GROUP BY id;
+
+WITH delete_rows AS (
+	DELETE FROM summary_table WHERE id > 10 RETURNING *
+)
+SELECT * FROM delete_rows ORDER BY id, counter;
 
 -- Check modifiying CTEs inside a transaction
 BEGIN;
@@ -304,6 +309,25 @@ raw_data AS (
 	DELETE FROM modify_table WHERE id = 1 AND val IN (SELECT val FROM select_data) RETURNING *
 )
 SELECT count(*) FROM raw_data;
+
+INSERT INTO modify_table VALUES (1,2), (1,6), (2, 3), (3, 5);
+WITH select_data AS (
+	SELECT * FROM modify_table
+),
+raw_data AS (
+	DELETE FROM modify_table WHERE id IN (SELECT id FROM select_data WHERE val > 5) RETURNING id, val
+)
+SELECT * FROM raw_data ORDER BY val;
+
+WITH select_data AS (
+	SELECT * FROM modify_table
+),
+raw_data AS (
+	UPDATE modify_table SET val = 0 WHERE id IN (SELECT id FROM select_data WHERE val < 5) RETURNING id, val
+)
+SELECT * FROM raw_data ORDER BY val;
+
+SELECT * FROM modify_table ORDER BY id, val;
 
 -- Test with replication factor 2
 SET citus.shard_replication_factor to 2;

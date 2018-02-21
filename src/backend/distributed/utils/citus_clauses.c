@@ -41,9 +41,70 @@ static Node * PartiallyEvaluateExpressionMutator(Node *expression,
 static Expr * citus_evaluate_expr(Expr *expr, Oid result_type, int32 result_typmod,
 								  Oid result_collation, PlanState *planState);
 
+static bool contain_volatile_functions_checker_citus(Oid func_id, void *context);
+static bool contain_volatile_functions_walker_citus(Node *node, void *context);
 static bool contain_mutable_functions_citus(Node *clause);
 static bool contain_mutable_functions_checker_citus(Oid func_id, void *context);
 static bool contain_mutable_functions_walker_citus(Node *node, void *context);
+
+
+bool
+contain_volatile_functions_citus(Node *clause)
+{
+	return contain_volatile_functions_walker_citus(clause, NULL);
+}
+
+
+static bool
+contain_volatile_functions_checker_citus(Oid func_id, void *context)
+{
+	if (func_id == CitusReadIntermediateResultFuncId())
+	{
+		return false;
+	}
+
+	return (func_volatile(func_id) == PROVOLATILE_VOLATILE);
+}
+
+
+static bool
+contain_volatile_functions_walker_citus(Node *node, void *context)
+{
+	if (node == NULL)
+	{
+		return false;
+	}
+
+	/* Check for volatile functions in node itself */
+	if (check_functions_in_node(node, contain_volatile_functions_checker_citus,
+								context))
+	{
+		return true;
+	}
+
+	if (IsA(node, NextValueExpr))
+	{
+		/* NextValueExpr is volatile */
+		return true;
+	}
+
+	/*
+	 * See notes in contain_mutable_functions_walker about why we treat
+	 * MinMaxExpr, XmlExpr, and CoerceToDomain as immutable, while
+	 * SQLValueFunction is stable.  Hence, none of them are of interest here.
+	 */
+
+	/* Recurse to check arguments */
+	if (IsA(node, Query))
+	{
+		/* Recurse into subselects */
+		return query_tree_walker((Query *) node,
+								 contain_volatile_functions_walker_citus,
+								 context, 0);
+	}
+	return expression_tree_walker(node, contain_volatile_functions_walker_citus,
+								  context);
+}
 
 
 static bool

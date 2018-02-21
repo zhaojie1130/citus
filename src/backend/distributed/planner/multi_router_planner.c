@@ -509,6 +509,8 @@ ModifyQuerySupported(Query *queryTree, bool multiShardQuery)
 	Node *onConflictWhere = NULL;
 
 	CmdType commandType = queryTree->commandType;
+	bool hasRecursivePlanning =
+		ContainsReadIntermediateResultFunction((Node *) queryTree);
 
 	/*
 	 * Reject subqueries which are in SELECT or WHERE clause.
@@ -520,7 +522,7 @@ ModifyQuerySupported(Query *queryTree, bool multiShardQuery)
 		 * We support UPDATE and DELETE with subqueries unless they are multi
 		 * shard queries.
 		 */
-		if (!UpdateOrDeleteQuery(queryTree) || multiShardQuery)
+		if (!UpdateOrDeleteQuery(queryTree) || (multiShardQuery && !hasRecursivePlanning))
 		{
 			StringInfo errorHint = makeStringInfo();
 			DistTableCacheEntry *cacheEntry = DistributedTableCacheEntry(
@@ -605,6 +607,11 @@ ModifyQuerySupported(Query *queryTree, bool multiShardQuery)
 			 * they are multi shard queries.
 			 */
 			if (UpdateOrDeleteQuery(queryTree) && !multiShardQuery)
+			{
+				continue;
+			}
+
+			if (hasRecursivePlanning)
 			{
 				continue;
 			}
@@ -707,7 +714,7 @@ ModifyQuerySupported(Query *queryTree, bool multiShardQuery)
 			}
 
 			if (commandType == CMD_UPDATE &&
-				contain_volatile_functions((Node *) targetEntry->expr))
+				contain_volatile_functions_citus((Node *) targetEntry->expr))
 			{
 				return DeferredError(ERRCODE_FEATURE_NOT_SUPPORTED,
 									 "functions used in UPDATE queries on distributed "
@@ -732,7 +739,7 @@ ModifyQuerySupported(Query *queryTree, bool multiShardQuery)
 
 		if (joinTree != NULL)
 		{
-			if (contain_volatile_functions(joinTree->quals))
+			if (contain_volatile_functions_citus(joinTree->quals))
 			{
 				return DeferredError(ERRCODE_FEATURE_NOT_SUPPORTED,
 									 "functions used in the WHERE clause of modification "
@@ -981,9 +988,6 @@ MasterIrreducibleExpressionWalker(Node *expression, WalkerState *state)
 	 * Once you've added them to this check, make sure you also evaluate them in the
 	 * executor!
 	 */
-
-	/* subqueries aren't allowed and should fail before control reaches this point */
-	Assert(!IsA(expression, Query));
 
 	hasVolatileFunction =
 		check_functions_in_node(expression, MasterIrreducibleExpressionFunctionChecker,
