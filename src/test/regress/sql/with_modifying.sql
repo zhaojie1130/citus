@@ -229,6 +229,44 @@ raw_data AS (
 )
 INSERT INTO summary_table SELECT id, COUNT(*) AS counter FROM raw_data GROUP BY id;
 
+INSERT INTO modify_table VALUES (21, 1), (22, 2), (23, 3);
+
+-- read ids from the same table
+WITH distinct_ids AS (
+  SELECT DISTINCT id FROM modify_table
+), 
+update_data AS (
+  UPDATE modify_table SET val = 100 WHERE id > 10 AND 
+  	id IN (SELECT * FROM distinct_ids) RETURNING *
+)
+SELECT count(*) FROM update_data;
+
+-- read ids from a different table
+WITH distinct_ids AS (
+  SELECT DISTINCT id FROM summary_table
+), 
+update_data AS (
+  UPDATE modify_table SET val = 100 WHERE id > 10 AND
+  	id IN (SELECT * FROM distinct_ids) RETURNING *
+)
+SELECT count(*) FROM update_data;
+
+-- test update with generate series
+UPDATE modify_table SET val = 200 WHERE id > 10 AND 
+	id IN (SELECT 2*s FROM generate_series(1,20) s);
+
+-- test update with generate series in CTE
+WITH update_data AS (
+	UPDATE modify_table SET val = 300 WHERE id > 10 AND 
+	id IN (SELECT 3*s FROM generate_series(1,20) s) RETURNING *
+)
+SELECT COUNT(*) FROM update_data;
+
+WITH delete_rows AS (
+	DELETE FROM modify_table WHERE id > 10 RETURNING *
+)
+SELECT * FROM delete_rows ORDER BY id, val;
+
 WITH delete_rows AS (
 	DELETE FROM summary_table WHERE id > 10 RETURNING *
 )
@@ -308,7 +346,7 @@ select_data AS (
 raw_data AS (
 	DELETE FROM modify_table WHERE id = 1 AND val IN (SELECT val FROM select_data) RETURNING *
 )
-SELECT count(*) FROM raw_data;
+SELECT COUNT(*) FROM raw_data;
 
 INSERT INTO modify_table VALUES (1,2), (1,6), (2, 3), (3, 5);
 WITH select_data AS (
@@ -328,6 +366,18 @@ raw_data AS (
 SELECT * FROM raw_data ORDER BY val;
 
 SELECT * FROM modify_table ORDER BY id, val;
+
+-- Test with joins
+WITH select_data AS (
+	SELECT * FROM modify_table
+),
+raw_data AS (
+	UPDATE modify_table SET val = 0 WHERE 
+		id IN (SELECT id FROM select_data) AND 
+		val IN (SELECT counter FROM summary_table)
+	RETURNING id, val
+)
+SELECT * FROM raw_data ORDER BY val;
 
 -- Test with replication factor 2
 SET citus.shard_replication_factor to 2;
