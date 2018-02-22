@@ -410,24 +410,25 @@ SELECT count(*) FROM update_data;
 -- test update with generate series
 UPDATE modify_table SET val = 200 WHERE id > 10 AND 
 	id IN (SELECT 2*s FROM generate_series(1,20) s);
-ERROR:  subqueries are not supported in modifications across multiple shards
-DETAIL:  Consider using an equality filter on partition column "id" to target a single shard.
 -- test update with generate series in CTE
 WITH update_data AS (
 	UPDATE modify_table SET val = 300 WHERE id > 10 AND 
 	id IN (SELECT 3*s FROM generate_series(1,20) s) RETURNING *
 )
 SELECT COUNT(*) FROM update_data;
-ERROR:  subqueries are not supported in modifications across multiple shards
-DETAIL:  Consider using an equality filter on partition column "id" to target a single shard.
+ count 
+-------
+     1
+(1 row)
+
 WITH delete_rows AS (
 	DELETE FROM modify_table WHERE id > 10 RETURNING *
 )
 SELECT * FROM delete_rows ORDER BY id, val;
  id | val 
 ----+-----
- 21 | 100
- 22 | 100
+ 21 | 300
+ 22 | 200
  23 | 100
 (3 rows)
 
@@ -525,10 +526,13 @@ WITH deleted_rows AS (
 	DELETE FROM modify_table WHERE id IN (SELECT id FROM modify_table WHERE val = 4) RETURNING *
 )
 SELECT * FROM deleted_rows;
-ERROR:  subqueries are not supported in modifications across multiple shards
-DETAIL:  Consider using an equality filter on partition column "id" to target a single shard.
-WITH deleted_rows AS (
-	DELETE FROM modify_table WHERE id IN (2) RETURNING *
+ERROR:  cannot perform distributed planning for the given modification
+DETAIL:  Joins are not supported in distributed modifications.
+WITH select_rows AS (
+	SELECT id FROM modify_table WHERE val = 4
+),
+deleted_rows AS (
+	DELETE FROM modify_table WHERE id IN (SELECT id FROM select_rows) RETURNING *
 )
 SELECT * FROM deleted_rows;
  id | val 
@@ -540,10 +544,13 @@ WITH deleted_rows AS (
 	DELETE FROM modify_table WHERE val IN (SELECT val FROM modify_table WHERE id = 3) RETURNING *
 )
 SELECT * FROM deleted_rows;
-ERROR:  subqueries are not supported in modifications across multiple shards
-DETAIL:  Consider using an equality filter on partition column "id" to target a single shard.
-WITH deleted_rows AS (
-	DELETE FROM modify_table WHERE val IN (6) RETURNING *
+ERROR:  cannot perform distributed planning for the given modification
+DETAIL:  Joins are not supported in distributed modifications.
+WITH select_rows AS (
+	SELECT val FROM modify_table WHERE id = 3
+),
+deleted_rows AS (
+	DELETE FROM modify_table WHERE val IN (SELECT val FROM select_rows) RETURNING *
 )
 SELECT * FROM deleted_rows;
  id | val 
@@ -555,8 +562,19 @@ WITH deleted_rows AS (
 	DELETE FROM modify_table WHERE ctid IN (SELECT ctid FROM modify_table WHERE id = 1) RETURNING *
 )
 SELECT * FROM deleted_rows;
-ERROR:  subqueries are not supported in modifications across multiple shards
-DETAIL:  Consider using an equality filter on partition column "id" to target a single shard.
+ERROR:  cannot perform distributed planning for the given modification
+DETAIL:  Joins are not supported in distributed modifications.
+WITH select_rows AS (
+	SELECT ctid FROM modify_table WHERE id = 1
+),
+deleted_rows AS (
+	DELETE FROM modify_table WHERE ctid IN (SELECT ctid FROM select_rows) RETURNING *
+)
+SELECT * FROM deleted_rows;
+ id | val 
+----+-----
+(0 rows)
+
 WITH added_data AS (
 	INSERT INTO modify_table VALUES (1,2), (1,6) RETURNING *
 ),

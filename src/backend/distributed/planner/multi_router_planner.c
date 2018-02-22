@@ -507,40 +507,7 @@ ModifyQuerySupported(Query *queryTree, bool multiShardQuery)
 	List *onConflictSet = NIL;
 	Node *arbiterWhere = NULL;
 	Node *onConflictWhere = NULL;
-
 	CmdType commandType = queryTree->commandType;
-	bool hasRecursivePlanning =
-		ContainsReadIntermediateResultFunction((Node *) queryTree);
-
-	/*
-	 * Reject subqueries which are in SELECT or WHERE clause.
-	 * Queries which include subqueries in FROM clauses are rejected below.
-	 */
-	if (queryTree->hasSubLinks == true)
-	{
-		/*
-		 * We support UPDATE and DELETE with subqueries unless they are multi
-		 * shard queries.
-		 */
-		if (!UpdateOrDeleteQuery(queryTree) || (multiShardQuery && !hasRecursivePlanning))
-		{
-			StringInfo errorHint = makeStringInfo();
-			DistTableCacheEntry *cacheEntry = DistributedTableCacheEntry(
-				distributedTableId);
-			char *partitionKeyString = cacheEntry->partitionKeyString;
-			char *partitionColumnName = ColumnNameToColumn(distributedTableId,
-														   partitionKeyString);
-
-			appendStringInfo(errorHint,
-							 "Consider using an equality filter on partition column \"%s\" to target a single shard.",
-							 partitionColumnName);
-
-			return DeferredError(ERRCODE_FEATURE_NOT_SUPPORTED,
-								 "subqueries are not supported in modifications across "
-								 "multiple shards",
-								 errorHint->data, NULL);
-		}
-	}
 
 	/* reject queries which include CommonTableExpr */
 	if (queryTree->cteList != NIL)
@@ -606,12 +573,7 @@ ModifyQuerySupported(Query *queryTree, bool multiShardQuery)
 			 * We support UPDATE and DELETE with subqueries and joins unless
 			 * they are multi shard queries.
 			 */
-			if (UpdateOrDeleteQuery(queryTree) && !multiShardQuery)
-			{
-				continue;
-			}
-
-			if (hasRecursivePlanning)
+			if (UpdateOrDeleteQuery(queryTree))
 			{
 				continue;
 			}

@@ -306,8 +306,11 @@ WITH deleted_rows AS (
 )
 SELECT * FROM deleted_rows;
 
-WITH deleted_rows AS (
-	DELETE FROM modify_table WHERE id IN (2) RETURNING *
+WITH select_rows AS (
+	SELECT id FROM modify_table WHERE val = 4
+),
+deleted_rows AS (
+	DELETE FROM modify_table WHERE id IN (SELECT id FROM select_rows) RETURNING *
 )
 SELECT * FROM deleted_rows;
 
@@ -316,13 +319,24 @@ WITH deleted_rows AS (
 )
 SELECT * FROM deleted_rows;
 
-WITH deleted_rows AS (
-	DELETE FROM modify_table WHERE val IN (6) RETURNING *
+WITH select_rows AS (
+	SELECT val FROM modify_table WHERE id = 3
+),
+deleted_rows AS (
+	DELETE FROM modify_table WHERE val IN (SELECT val FROM select_rows) RETURNING *
 )
 SELECT * FROM deleted_rows;
 
 WITH deleted_rows AS (
 	DELETE FROM modify_table WHERE ctid IN (SELECT ctid FROM modify_table WHERE id = 1) RETURNING *
+)
+SELECT * FROM deleted_rows;
+
+WITH select_rows AS (
+	SELECT ctid FROM modify_table WHERE id = 1
+),
+deleted_rows AS (
+	DELETE FROM modify_table WHERE ctid IN (SELECT ctid FROM select_rows) RETURNING *
 )
 SELECT * FROM deleted_rows;
 
