@@ -509,8 +509,6 @@ ModifyQuerySupported(Query *queryTree, bool multiShardQuery)
 	Node *onConflictWhere = NULL;
 
 	CmdType commandType = queryTree->commandType;
-	bool hasRecursivePlanning =
-		ContainsReadIntermediateResultFunction((Node *) queryTree);
 
 	/*
 	 * Reject subqueries which are in SELECT or WHERE clause.
@@ -522,7 +520,7 @@ ModifyQuerySupported(Query *queryTree, bool multiShardQuery)
 		 * We support UPDATE and DELETE with subqueries unless they are multi
 		 * shard queries.
 		 */
-		if (!UpdateOrDeleteQuery(queryTree) || (multiShardQuery && !hasRecursivePlanning))
+		if (!UpdateOrDeleteQuery(queryTree))
 		{
 			StringInfo errorHint = makeStringInfo();
 			DistTableCacheEntry *cacheEntry = DistributedTableCacheEntry(
