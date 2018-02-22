@@ -968,8 +968,8 @@ ERROR:  cannot perform distributed planning for the given modification
 DETAIL:  Joins are not supported in distributed modifications.
 UPDATE summary_table SET average_value = average_value + 1 WHERE id =
   (SELECT id FROM raw_table WHERE value > 100);
-ERROR:  cannot perform distributed planning for the given modification
-DETAIL:  Joins are not supported in distributed modifications.
+ERROR:  subqueries are not supported in modifications across multiple shards
+DETAIL:  Consider using an equality filter on partition column "id" to target a single shard.
 -- test complex queries
 UPDATE summary_table
 SET
