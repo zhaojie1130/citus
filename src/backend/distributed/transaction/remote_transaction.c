@@ -444,8 +444,8 @@ FinishRemoteTransactionAbort(MultiConnection *connection)
 
 	PQclear(result);
 
-	result = GetRemoteCommandResult(connection, dontRaiseErrors);
-	Assert(!result);
+	/* the transaction is already aborted, clear any pending activity if exists */
+	ForgetResults(connection);
 
 	transaction->transactionState = REMOTE_TRANS_ABORTED;
 }
