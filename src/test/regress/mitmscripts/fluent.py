@@ -18,6 +18,10 @@ Ideas (unimplemented):
 - flow.filter(shard=102457).kill()
 - packet.contains("SELECT").kill()
 - flow.shard("102456").contains("COPY").kill()
+- worker.once(and(flow.contains("COPY"),flow.contains("SELECT"))).partition()
+- worker.after(packet.contains("COPY")).then(packet.contains("SELECT")).partition()
+- worker.after(query="COPY").and(query="SELECT").partition()
+- flow.after(query="COPY").then(query="SELECT").do(worker.partition())
 
 Should probably rename killall() -> killworker()
 
@@ -25,7 +29,6 @@ Instead of having _handle and _accept, you should separate out the builders from
 handlers? The builders just configure a handler which is then passed to mitmproxy
 
 What about: wait until .copyOutResponse(), then kill after 5 of any message have passed
-
 '''
 
 class Stop(Exception):
