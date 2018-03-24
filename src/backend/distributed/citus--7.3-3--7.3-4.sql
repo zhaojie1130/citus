@@ -11,7 +11,7 @@ RETURNS text AS $$
   my $fh;
 
   open($fh, '>', $filename) or die 'could not write to mitmproxy';
-  print($fh "command\n");
+  print($fh "$command\n");
   close($fh);
 
   open($fh, '<', $filename) or die 'could not read from mitmproxy';

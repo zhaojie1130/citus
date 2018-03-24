@@ -1,7 +1,9 @@
+import re
+import threading
+
 from mitmproxy import ctx
 from mitmproxy.utils import strutils
 from mitmproxy.proxy.protocol import TlsLayer, RawTCPLayer
-import re
 
 '''
 Use with a command line like this:
@@ -172,12 +174,33 @@ def print_message(tcp_msg):
         strutils.bytes_to_escaped_str(tcp_msg.content)
     ))
 
+# thread which listens for commands
+
+fifoname = '/home/brian/Work/citus/src/test/regress/mitmproxy.fifo'
+
+def listen_for_commands(master):
+    while True:
+        with open(fifoname, mode='r') as fifo:
+            slug = fifo.read()
+
+        try:
+            build_handler(slug)
+            master.options.update(slug=slug)
+        except Exception as e:
+            result = str(e)
+        else:
+            result = ''
+
+        with open(fifoname, mode='w') as fifo:
+            fifo.write('{}\n'.format(result))
+
 # callsbacks for mitmproxy
 
 handler = None
 
 def load(loader):
     loader.add_option('slug', str, 'flow.allow()', "A script to run")
+    threading.Thread(target=listen_for_commands, args=(loader.master,), daemon=True).start()
 
 def configure(updated):
     global handler
