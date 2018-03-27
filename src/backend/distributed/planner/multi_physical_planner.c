@@ -1886,8 +1886,6 @@ BuildMapMergeJob(Query *jobQuery, List *dependedJobList, Var *partitionKey,
 		mapMergeJob->partitionCount = shardCount;
 		mapMergeJob->sortedShardIntervalArray = sortedShardIntervalArray;
 		mapMergeJob->sortedShardIntervalArrayLength = shardCount;
-
-
 	}
 	else if (partitionType == RANGE_PARTITION_TYPE)
 	{
@@ -3270,6 +3268,7 @@ FragmentCombinationList(List *rangeTableFragmentsList, Query *jobQuery,
 		/* find the next range table to add to our search space */
 		tableId = joinSequenceArray[joinSequenceIndex].rangeTableId;
 		tableFragments = FindRangeTableFragmentsList(rangeTableFragmentsList, tableId);
+
 		/* resolve sequence index for the previous range table we join against */
 		joiningTableId = joinSequenceArray[joinSequenceIndex].joiningRangeTableId;
 		if (joiningTableId != NON_PRUNABLE_JOIN)
@@ -3666,7 +3665,8 @@ JoinPrunable(RangeTableFragment *leftFragment, RangeTableFragment *rightFragment
 	if (leftFragment->fragmentType == RTE_RELATION &&
 		rightFragment->fragmentType == CITUS_RTE_REMOTE_QUERY)
 	{
-		ShardInterval *leftFragmentInterval = (ShardInterval *) leftFragment->fragmentReference;
+		ShardInterval *leftFragmentInterval =
+			(ShardInterval *) leftFragment->fragmentReference;
 		Task *rightMergeTask = (Task *) rightFragment->fragmentReference;
 
 		if (ShardIndex(leftFragmentInterval) != rightMergeTask->partitionId)
@@ -3674,6 +3674,27 @@ JoinPrunable(RangeTableFragment *leftFragment, RangeTableFragment *rightFragment
 			ereport(DEBUG2, (errmsg("join prunable for task partitionId %u and %u",
 									ShardIndex(leftFragmentInterval),
 									rightMergeTask->partitionId)));
+			return true;
+		}
+		else
+		{
+			return false;
+		}
+	}
+
+	if (leftFragment->fragmentType == CITUS_RTE_REMOTE_QUERY &&
+		rightFragment->fragmentType == RTE_RELATION)
+	{
+		ShardInterval *rightFragmentInterval =
+			(ShardInterval *) rightFragment->fragmentReference;
+		Task *leftMergeTask = (Task *) leftFragment->fragmentReference;
+
+
+		if (ShardIndex(rightFragmentInterval) != leftMergeTask->partitionId)
+		{
+			ereport(DEBUG2, (errmsg("join prunable for task partitionId %u and %u",
+									ShardIndex(rightFragmentInterval),
+									leftMergeTask->partitionId)));
 			return true;
 		}
 		else

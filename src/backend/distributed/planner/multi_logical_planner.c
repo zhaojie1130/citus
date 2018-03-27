@@ -141,8 +141,8 @@ static MultiNode * ApplySinglePartitionJoin(MultiNode *leftNode, MultiNode *righ
 											Var *partitionColumn, JoinType joinType,
 											List *joinClauses);
 static MultiNode * ApplySingleHashPartitionJoin(MultiNode *leftNode, MultiNode *rightNode,
-											Var *partitionColumn, JoinType joinType,
-											List *joinClauses);
+												Var *partitionColumn, JoinType joinType,
+												List *joinClauses);
 
 static MultiNode * ApplyDualPartitionJoin(MultiNode *leftNode, MultiNode *rightNode,
 										  Var *partitionColumn, JoinType joinType,
@@ -3480,7 +3480,8 @@ JoinRuleApplyFunction(JoinRuleType ruleType)
 		RuleApplyFunctionArray[BROADCAST_JOIN] = &ApplyBroadcastJoin;
 		RuleApplyFunctionArray[LOCAL_PARTITION_JOIN] = &ApplyLocalJoin;
 		RuleApplyFunctionArray[SINGLE_RANGE_PARTITION_JOIN] = &ApplySinglePartitionJoin;
-		RuleApplyFunctionArray[SINGLE_HASH_PARTITION_JOIN] = &ApplySingleHashPartitionJoin;
+		RuleApplyFunctionArray[SINGLE_HASH_PARTITION_JOIN] =
+			&ApplySingleHashPartitionJoin;
 		RuleApplyFunctionArray[DUAL_PARTITION_JOIN] = &ApplyDualPartitionJoin;
 		RuleApplyFunctionArray[CARTESIAN_PRODUCT] = &ApplyCartesianProduct;
 
@@ -3624,8 +3625,8 @@ ApplySinglePartitionJoin(MultiNode *leftNode, MultiNode *rightNode,
  */
 static MultiNode *
 ApplySingleHashPartitionJoin(MultiNode *leftNode, MultiNode *rightNode,
-						 Var *partitionColumn, JoinType joinType,
-						 List *applicableJoinClauses)
+							 Var *partitionColumn, JoinType joinType,
+							 List *applicableJoinClauses)
 {
 	OpExpr *joinClause = NULL;
 	Var *leftColumn = NULL;
@@ -3696,6 +3697,7 @@ ApplySingleHashPartitionJoin(MultiNode *leftNode, MultiNode *rightNode,
 
 	return (MultiNode *) joinNode;
 }
+
 
 /*
  * ApplyDualPartitionJoin creates a new MultiJoin node that joins the left and

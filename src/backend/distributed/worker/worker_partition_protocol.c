@@ -892,7 +892,6 @@ FilterAndPartitionTable(const char *filterQuery,
 							  rowOutputState, columnOutputFunctions, NULL);
 
 			rowText = rowOutputState->fe_msgbuf;
-
 			partitionFile = partitionFileArray[partitionId];
 			FileOutputStreamWrite(partitionFile, rowText);
 
@@ -1172,13 +1171,29 @@ HashPartitionId(Datum partitionValue, const void *context)
 	FmgrInfo *hashFunction = hashPartitionContext->hashFunction;
 	uint32 partitionCount = hashPartitionContext->partitionCount;
 	Datum hashDatum = 0;
-	uint32 hashResult = 0;
+	int32 hashResult = 0;
 	uint32 hashPartitionId = 0;
 
 	/* hash functions return unsigned 32-bit integers */
 	hashDatum = FunctionCall1(hashFunction, partitionValue);
-	hashResult = DatumGetUInt32(hashDatum);
+	hashResult = DatumGetInt32(hashDatum);
 	hashPartitionId = (hashResult % partitionCount);
+#define HASH_TOKEN_COUNT INT64CONST(4294967296)
 
-	return hashPartitionId;
+
+	uint64 hashTokenIncrement = HASH_TOKEN_COUNT / partitionCount;
+
+	int shardIndex = (uint32) (hashResult - INT32_MIN) / hashTokenIncrement;
+
+	/*
+	 * If the shard count is not power of 2, the range of the last
+	 * shard becomes larger than others. For that extra piece of range,
+	 * we still need to use the last shard.
+	 */
+	if (shardIndex == partitionCount)
+	{
+		shardIndex = shardIndex - 1;
+	}
+
+	return shardIndex;
 }

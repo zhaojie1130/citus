@@ -1117,7 +1117,8 @@ JoinRuleName(JoinRuleType ruleType)
 		/* use strdup() to be independent of memory contexts */
 		RuleNameArray[BROADCAST_JOIN] = strdup("broadcast join");
 		RuleNameArray[LOCAL_PARTITION_JOIN] = strdup("local partition join");
-		RuleNameArray[SINGLE_RANGE_PARTITION_JOIN] = strdup("single range partition join");
+		RuleNameArray[SINGLE_RANGE_PARTITION_JOIN] = strdup(
+			"single range partition join");
 		RuleNameArray[SINGLE_HASH_PARTITION_JOIN] = strdup("single hash partition join");
 		RuleNameArray[DUAL_PARTITION_JOIN] = strdup("dual partition join");
 		RuleNameArray[CARTESIAN_PRODUCT] = strdup("cartesian product");
@@ -1267,7 +1268,6 @@ SinglePartitionJoin(JoinOrderNode *currentJoinNode, TableEntry *candidateTable,
 	uint32 tableId = candidateTable->rangeTableId;
 	Var *candidatePartitionColumn = PartitionColumn(relationId, tableId);
 	char candidatePartitionMethod = PartitionMethod(relationId);
-	OpExpr *joinClause = NULL;
 
 	/* outer joins are not supported yet */
 	if (IS_OUTER_JOIN(joinType))
@@ -1295,7 +1295,6 @@ SinglePartitionJoin(JoinOrderNode *currentJoinNode, TableEntry *candidateTable,
 		}
 		else
 		{
-
 			nextJoinNode = MakeJoinOrderNode(candidateTable, SINGLE_HASH_PARTITION_JOIN,
 											 currentPartitionColumn,
 											 currentPartitionMethod);
@@ -1312,15 +1311,16 @@ SinglePartitionJoin(JoinOrderNode *currentJoinNode, TableEntry *candidateTable,
 		{
 			if (currentPartitionMethod != DISTRIBUTE_BY_HASH)
 			{
-				nextJoinNode = MakeJoinOrderNode(candidateTable, SINGLE_RANGE_PARTITION_JOIN,
-												 currentPartitionColumn,
+				nextJoinNode = MakeJoinOrderNode(candidateTable,
+												 SINGLE_RANGE_PARTITION_JOIN,
+												 candidatePartitionColumn,
 												 currentPartitionMethod);
 			}
 			else
 			{
-
-				nextJoinNode = MakeJoinOrderNode(candidateTable, SINGLE_HASH_PARTITION_JOIN,
-												 currentPartitionColumn,
+				nextJoinNode = MakeJoinOrderNode(candidateTable,
+												 SINGLE_HASH_PARTITION_JOIN,
+												 candidatePartitionColumn,
 												 currentPartitionMethod);
 			}
 		}
