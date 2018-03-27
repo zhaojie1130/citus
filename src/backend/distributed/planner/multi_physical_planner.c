@@ -318,7 +318,8 @@ BuildJobTree(MultiTreeRoot *multiTree)
 		if (currentNodeType == T_MultiJoin)
 		{
 			MultiJoin *joinNode = (MultiJoin *) currentNode;
-			if (joinNode->joinRuleType == SINGLE_PARTITION_JOIN ||
+			if (joinNode->joinRuleType == SINGLE_RANGE_PARTITION_JOIN ||
+				joinNode->joinRuleType == SINGLE_HASH_PARTITION_JOIN ||
 				joinNode->joinRuleType == DUAL_PARTITION_JOIN)
 			{
 				boundaryNodeJobType = JOIN_MAP_MERGE_JOB;
@@ -348,9 +349,14 @@ BuildJobTree(MultiTreeRoot *multiTree)
 			PartitionType partitionType = PARTITION_INVALID_FIRST;
 			Oid baseRelationId = InvalidOid;
 
-			if (joinNode->joinRuleType == SINGLE_PARTITION_JOIN)
+			if (joinNode->joinRuleType == SINGLE_RANGE_PARTITION_JOIN)
 			{
 				partitionType = RANGE_PARTITION_TYPE;
+				baseRelationId = RangePartitionJoinBaseRelationId(joinNode);
+			}
+			else if (joinNode->joinRuleType == SINGLE_HASH_PARTITION_JOIN)
+			{
+				partitionType = SINGLE_HASH_PARTITION_TYPE;
 				baseRelationId = RangePartitionJoinBaseRelationId(joinNode);
 			}
 			else if (joinNode->joinRuleType == DUAL_PARTITION_JOIN)
@@ -1854,6 +1860,35 @@ BuildMapMergeJob(Query *jobQuery, List *dependedJobList, Var *partitionKey,
 		mapMergeJob->partitionType = HASH_PARTITION_TYPE;
 		mapMergeJob->partitionCount = partitionCount;
 	}
+	else if (partitionType == SINGLE_HASH_PARTITION_TYPE)
+	{
+		/* build the split point object for the table on the right-hand side */
+		DistTableCacheEntry *cache = DistributedTableCacheEntry(baseRelationId);
+
+		bool hasUninitializedShardInterval = false;
+		uint32 shardCount = cache->shardIntervalArrayLength;
+		ShardInterval **sortedShardIntervalArray = cache->sortedShardIntervalArray;
+		char basePartitionMethod PG_USED_FOR_ASSERTS_ONLY = 0;
+
+		hasUninitializedShardInterval = cache->hasUninitializedShardInterval;
+		if (hasUninitializedShardInterval)
+		{
+			ereport(ERROR, (errmsg("cannot range repartition shard with "
+								   "missing min/max values")));
+		}
+
+		basePartitionMethod = PartitionMethod(baseRelationId);
+
+		/* this join-type currently doesn't work for hash partitioned tables */
+		Assert(basePartitionMethod == DISTRIBUTE_BY_HASH);
+
+		mapMergeJob->partitionType = SINGLE_HASH_PARTITION_TYPE;
+		mapMergeJob->partitionCount = shardCount;
+		mapMergeJob->sortedShardIntervalArray = sortedShardIntervalArray;
+		mapMergeJob->sortedShardIntervalArrayLength = shardCount;
+
+
+	}
 	else if (partitionType == RANGE_PARTITION_TYPE)
 	{
 		/* build the split point object for the table on the right-hand side */
@@ -3235,7 +3270,6 @@ FragmentCombinationList(List *rangeTableFragmentsList, Query *jobQuery,
 		/* find the next range table to add to our search space */
 		tableId = joinSequenceArray[joinSequenceIndex].rangeTableId;
 		tableFragments = FindRangeTableFragmentsList(rangeTableFragmentsList, tableId);
-
 		/* resolve sequence index for the previous range table we join against */
 		joiningTableId = joinSequenceArray[joinSequenceIndex].joiningRangeTableId;
 		if (joiningTableId != NON_PRUNABLE_JOIN)
@@ -3620,6 +3654,25 @@ JoinPrunable(RangeTableFragment *leftFragment, RangeTableFragment *rightFragment
 		{
 			ereport(DEBUG2, (errmsg("join prunable for task partitionId %u and %u",
 									leftMergeTask->partitionId,
+									rightMergeTask->partitionId)));
+			return true;
+		}
+		else
+		{
+			return false;
+		}
+	}
+
+	if (leftFragment->fragmentType == RTE_RELATION &&
+		rightFragment->fragmentType == CITUS_RTE_REMOTE_QUERY)
+	{
+		ShardInterval *leftFragmentInterval = (ShardInterval *) leftFragment->fragmentReference;
+		Task *rightMergeTask = (Task *) rightFragment->fragmentReference;
+
+		if (ShardIndex(leftFragmentInterval) != rightMergeTask->partitionId)
+		{
+			ereport(DEBUG2, (errmsg("join prunable for task partitionId %u and %u",
+									ShardIndex(leftFragmentInterval),
 									rightMergeTask->partitionId)));
 			return true;
 		}

@@ -140,6 +140,10 @@ static MultiNode * ApplyLocalJoin(MultiNode *leftNode, MultiNode *rightNode,
 static MultiNode * ApplySinglePartitionJoin(MultiNode *leftNode, MultiNode *rightNode,
 											Var *partitionColumn, JoinType joinType,
 											List *joinClauses);
+static MultiNode * ApplySingleHashPartitionJoin(MultiNode *leftNode, MultiNode *rightNode,
+											Var *partitionColumn, JoinType joinType,
+											List *joinClauses);
+
 static MultiNode * ApplyDualPartitionJoin(MultiNode *leftNode, MultiNode *rightNode,
 										  Var *partitionColumn, JoinType joinType,
 										  List *joinClauses);
@@ -3475,7 +3479,8 @@ JoinRuleApplyFunction(JoinRuleType ruleType)
 	{
 		RuleApplyFunctionArray[BROADCAST_JOIN] = &ApplyBroadcastJoin;
 		RuleApplyFunctionArray[LOCAL_PARTITION_JOIN] = &ApplyLocalJoin;
-		RuleApplyFunctionArray[SINGLE_PARTITION_JOIN] = &ApplySinglePartitionJoin;
+		RuleApplyFunctionArray[SINGLE_RANGE_PARTITION_JOIN] = &ApplySinglePartitionJoin;
+		RuleApplyFunctionArray[SINGLE_HASH_PARTITION_JOIN] = &ApplySingleHashPartitionJoin;
 		RuleApplyFunctionArray[DUAL_PARTITION_JOIN] = &ApplyDualPartitionJoin;
 		RuleApplyFunctionArray[CARTESIAN_PRODUCT] = &ApplyCartesianProduct;
 
@@ -3604,13 +3609,93 @@ ApplySinglePartitionJoin(MultiNode *leftNode, MultiNode *rightNode,
 	}
 
 	/* finally set join operator fields */
-	joinNode->joinRuleType = SINGLE_PARTITION_JOIN;
+	joinNode->joinRuleType = SINGLE_RANGE_PARTITION_JOIN;
 	joinNode->joinType = joinType;
 	joinNode->joinClauseList = applicableJoinClauses;
 
 	return (MultiNode *) joinNode;
 }
 
+
+/*
+ * ApplySinglePartitionJoin creates a new MultiJoin node that joins the left and
+ * right node. The function also adds a MultiPartition node on top of the node
+ * (left or right) that is not partitioned on the join column.
+ */
+static MultiNode *
+ApplySingleHashPartitionJoin(MultiNode *leftNode, MultiNode *rightNode,
+						 Var *partitionColumn, JoinType joinType,
+						 List *applicableJoinClauses)
+{
+	OpExpr *joinClause = NULL;
+	Var *leftColumn = NULL;
+	Var *rightColumn = NULL;
+	List *rightTableIdList = NIL;
+	uint32 rightTableId = 0;
+	uint32 partitionTableId = partitionColumn->varno;
+
+	/* create all operator structures up front */
+	MultiJoin *joinNode = CitusMakeNode(MultiJoin);
+	MultiCollect *collectNode = CitusMakeNode(MultiCollect);
+	MultiPartition *partitionNode = CitusMakeNode(MultiPartition);
+
+	/*
+	 * We first find the appropriate join clause. Then, we compare the partition
+	 * column against the join clause's columns. If one of the columns matches,
+	 * we introduce a (re-)partition operator for the other column.
+	 */
+	joinClause = SinglePartitionJoinClause(partitionColumn, applicableJoinClauses);
+	Assert(joinClause != NULL);
+
+	leftColumn = LeftColumn(joinClause);
+	rightColumn = RightColumn(joinClause);
+
+	if (equal(partitionColumn, leftColumn))
+	{
+		partitionNode->partitionColumn = rightColumn;
+		partitionNode->splitPointTableId = partitionTableId;
+	}
+	else if (equal(partitionColumn, rightColumn))
+	{
+		partitionNode->partitionColumn = leftColumn;
+		partitionNode->splitPointTableId = partitionTableId;
+	}
+
+	/* determine the node the partition operator goes on top of */
+	rightTableIdList = OutputTableIdList(rightNode);
+	rightTableId = (uint32) linitial_int(rightTableIdList);
+	Assert(list_length(rightTableIdList) == 1);
+
+	/*
+	 * If the right child node is partitioned on the partition key column, we
+	 * add the partition operator on the left child node; and vice versa. Then,
+	 * we add a collect operator on top of the partition operator, and always
+	 * make sure that we have at most one relation on the right-hand side.
+	 */
+	if (partitionTableId == rightTableId)
+	{
+		SetChild((MultiUnaryNode *) partitionNode, leftNode);
+		SetChild((MultiUnaryNode *) collectNode, (MultiNode *) partitionNode);
+
+		SetLeftChild((MultiBinaryNode *) joinNode, (MultiNode *) collectNode);
+		SetRightChild((MultiBinaryNode *) joinNode, rightNode);
+	}
+	else
+	{
+		SetChild((MultiUnaryNode *) partitionNode, rightNode);
+		SetChild((MultiUnaryNode *) collectNode, (MultiNode *) partitionNode);
+
+		SetLeftChild((MultiBinaryNode *) joinNode, leftNode);
+		SetRightChild((MultiBinaryNode *) joinNode, (MultiNode *) collectNode);
+	}
+
+	/* finally set join operator fields */
+	joinNode->joinRuleType = SINGLE_HASH_PARTITION_JOIN;
+	joinNode->joinType = joinType;
+	joinNode->joinClauseList = applicableJoinClauses;
+
+	return (MultiNode *) joinNode;
+}
 
 /*
  * ApplyDualPartitionJoin creates a new MultiJoin node that joins the left and
