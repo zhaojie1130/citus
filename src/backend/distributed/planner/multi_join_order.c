@@ -670,7 +670,7 @@ LargeDataTransferLocation(List *joinOrder)
 		JoinRuleType joinRuleType = joinOrderNode->joinRuleType;
 
 		/* we consider the following join rules to cause large data transfers */
-		if (joinRuleType == SINGLE_PARTITION_JOIN ||
+		if (joinRuleType == SINGLE_RANGE_PARTITION_JOIN ||
 			joinRuleType == DUAL_PARTITION_JOIN ||
 			joinRuleType == CARTESIAN_PRODUCT)
 		{
@@ -863,7 +863,7 @@ JoinRuleEvalFunction(JoinRuleType ruleType)
 	{
 		RuleEvalFunctionArray[REFERENCE_JOIN] = &ReferenceJoin;
 		RuleEvalFunctionArray[LOCAL_PARTITION_JOIN] = &LocalJoin;
-		RuleEvalFunctionArray[SINGLE_PARTITION_JOIN] = &SinglePartitionJoin;
+		RuleEvalFunctionArray[SINGLE_RANGE_PARTITION_JOIN] = &SinglePartitionJoin;
 		RuleEvalFunctionArray[DUAL_PARTITION_JOIN] = &DualPartitionJoin;
 		RuleEvalFunctionArray[CARTESIAN_PRODUCT] = &CartesianProduct;
 
@@ -889,7 +889,8 @@ JoinRuleName(JoinRuleType ruleType)
 		/* use strdup() to be independent of memory contexts */
 		RuleNameArray[REFERENCE_JOIN] = strdup("reference join");
 		RuleNameArray[LOCAL_PARTITION_JOIN] = strdup("local partition join");
-		RuleNameArray[SINGLE_PARTITION_JOIN] = strdup("single partition join");
+		RuleNameArray[SINGLE_RANGE_PARTITION_JOIN] =
+			strdup("single range partition join");
 		RuleNameArray[DUAL_PARTITION_JOIN] = strdup("dual partition join");
 		RuleNameArray[CARTESIAN_PRODUCT] = strdup("cartesian product");
 
@@ -1072,7 +1073,7 @@ SinglePartitionJoin(JoinOrderNode *currentJoinNode, TableEntry *candidateTable,
 
 		if (joinClause != NULL)
 		{
-			nextJoinNode = MakeJoinOrderNode(candidateTable, SINGLE_PARTITION_JOIN,
+			nextJoinNode = MakeJoinOrderNode(candidateTable, SINGLE_RANGE_PARTITION_JOIN,
 											 currentPartitionColumn,
 											 currentPartitionMethod,
 											 currentAnchorTable);
@@ -1088,7 +1089,7 @@ SinglePartitionJoin(JoinOrderNode *currentJoinNode, TableEntry *candidateTable,
 
 		if (joinClause != NULL)
 		{
-			nextJoinNode = MakeJoinOrderNode(candidateTable, SINGLE_PARTITION_JOIN,
+			nextJoinNode = MakeJoinOrderNode(candidateTable, SINGLE_RANGE_PARTITION_JOIN,
 											 candidatePartitionColumn,
 											 candidatePartitionMethod,
 											 candidateTable);
