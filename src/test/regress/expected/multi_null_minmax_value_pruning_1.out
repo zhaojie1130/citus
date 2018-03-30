@@ -9,7 +9,7 @@ SHOW server_version \gset
 SELECT substring(:'server_version', '\d+')::int AS server_version;
  server_version 
 ----------------
-             10
+              9
 (1 row)
 
 SET client_min_messages TO DEBUG2;
@@ -19,25 +19,22 @@ SET citus.explain_all_tasks TO on;
 SET citus.task_executor_type TO 'real-time';
 -- Change configuration to treat lineitem and orders tables as large
 SET citus.large_table_shard_count TO 2;
-SET citus.log_multi_join_order to true;
-SET citus.enable_repartition_joins to ON;
 SELECT shardminvalue, shardmaxvalue from pg_dist_shard WHERE shardid = 290000;
  shardminvalue | shardmaxvalue 
 ---------------+---------------
- 1             | 5986
+ 1             | 1509
 (1 row)
 
 SELECT shardminvalue, shardmaxvalue from pg_dist_shard WHERE shardid = 290001;
  shardminvalue | shardmaxvalue 
 ---------------+---------------
- 8997          | 14947
+ 1509          | 2951
 (1 row)
 
 -- Check that partition and join pruning works when min/max values exist
 -- Adding l_orderkey = 1 to make the query not router executable
 EXPLAIN (COSTS FALSE)
 SELECT l_orderkey, l_linenumber, l_shipdate FROM lineitem WHERE l_orderkey = 9030 or l_orderkey = 1;
-LOG:  join order: [ "lineitem" ]
                               QUERY PLAN                               
 -----------------------------------------------------------------------
  Custom Scan (Citus Real-Time)
@@ -45,15 +42,6 @@ LOG:  join order: [ "lineitem" ]
    Tasks Shown: All
    ->  Task
          Node: host=localhost port=57637 dbname=regression
-         ->  Bitmap Heap Scan on lineitem_290001 lineitem
-               Recheck Cond: ((l_orderkey = 9030) OR (l_orderkey = 1))
-               ->  BitmapOr
-                     ->  Bitmap Index Scan on lineitem_pkey_290001
-                           Index Cond: (l_orderkey = 9030)
-                     ->  Bitmap Index Scan on lineitem_pkey_290001
-                           Index Cond: (l_orderkey = 1)
-   ->  Task
-         Node: host=localhost port=57638 dbname=regression
          ->  Bitmap Heap Scan on lineitem_290000 lineitem
                Recheck Cond: ((l_orderkey = 9030) OR (l_orderkey = 1))
                ->  BitmapOr
@@ -61,28 +49,41 @@ LOG:  join order: [ "lineitem" ]
                            Index Cond: (l_orderkey = 9030)
                      ->  Bitmap Index Scan on lineitem_pkey_290000
                            Index Cond: (l_orderkey = 1)
+   ->  Task
+         Node: host=localhost port=57638 dbname=regression
+         ->  Bitmap Heap Scan on lineitem_290004 lineitem
+               Recheck Cond: ((l_orderkey = 9030) OR (l_orderkey = 1))
+               ->  BitmapOr
+                     ->  Bitmap Index Scan on lineitem_pkey_290004
+                           Index Cond: (l_orderkey = 9030)
+                     ->  Bitmap Index Scan on lineitem_pkey_290004
+                           Index Cond: (l_orderkey = 1)
 (21 rows)
 
 EXPLAIN (COSTS FALSE)
 SELECT sum(l_linenumber), avg(l_linenumber) FROM lineitem, orders
 	WHERE l_orderkey = o_orderkey;
-LOG:  join order: [ "lineitem" ][ local partition join "orders" ]
-DEBUG:  join prunable for intervals [1,5986] and [8997,14947]
-DEBUG:  join prunable for intervals [8997,14947] and [1,5986]
+DEBUG:  join prunable for intervals [1,1509] and [8997,14946]
+DEBUG:  join prunable for intervals [1509,2951] and [8997,14946]
+DEBUG:  join prunable for intervals [2951,4455] and [8997,14946]
+DEBUG:  join prunable for intervals [4480,5986] and [8997,14946]
+DEBUG:  join prunable for intervals [8997,10560] and [1,5986]
+DEBUG:  join prunable for intervals [10560,12036] and [1,5986]
+DEBUG:  join prunable for intervals [12036,13473] and [1,5986]
+DEBUG:  join prunable for intervals [13473,14947] and [1,5986]
                                               QUERY PLAN                                              
 ------------------------------------------------------------------------------------------------------
  Aggregate
    ->  Custom Scan (Citus Real-Time)
-         Task Count: 2
+         Task Count: 8
          Tasks Shown: All
          ->  Task
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
-                           ->  Index Only Scan using lineitem_pkey_290001 on lineitem_290001 lineitem
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
                            ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
+                           ->  Index Only Scan using lineitem_pkey_290001 on lineitem_290001 lineitem
          ->  Task
                Node: host=localhost port=57638 dbname=regression
                ->  Aggregate
@@ -94,53 +95,51 @@ DEBUG:  join prunable for intervals [8997,14947] and [1,5986]
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
+                           ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
                            ->  Index Only Scan using lineitem_pkey_290003 on lineitem_290003 lineitem
-                           ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
          ->  Task
                Node: host=localhost port=57638 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
+                           ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
                            ->  Index Only Scan using lineitem_pkey_290002 on lineitem_290002 lineitem
-                           ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
          ->  Task
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
+                           ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
                            ->  Index Only Scan using lineitem_pkey_290005 on lineitem_290005 lineitem
-                           ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
          ->  Task
                Node: host=localhost port=57638 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
-                           ->  Index Only Scan using lineitem_pkey_290004 on lineitem_290004 lineitem
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
                            ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
+                           ->  Index Only Scan using lineitem_pkey_290004 on lineitem_290004 lineitem
          ->  Task
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
-                           ->  Index Only Scan using lineitem_pkey_290007 on lineitem_290007 lineitem
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
                            ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
+                           ->  Index Only Scan using lineitem_pkey_290007 on lineitem_290007 lineitem
          ->  Task
                Node: host=localhost port=57638 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
-                           ->  Index Only Scan using lineitem_pkey_290006 on lineitem_290006 lineitem
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
                            ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
+                           ->  Index Only Scan using lineitem_pkey_290006 on lineitem_290006 lineitem
 (60 rows)
 
 -- Now set the minimum value for a shard to null. Then check that we don't apply
--- partition or join pruning for the shard with null min value. Since it is not
--- supported with single-repartition join, dual-repartition has been used.
+-- partition or join pruning for the shard with null min value.
 UPDATE pg_dist_shard SET shardminvalue = NULL WHERE shardid = 290000;
 EXPLAIN (COSTS FALSE)
 SELECT l_orderkey, l_linenumber, l_shipdate FROM lineitem WHERE l_orderkey = 9030;
-LOG:  join order: [ "lineitem" ]
                                   QUERY PLAN                                   
 -------------------------------------------------------------------------------
  Custom Scan (Citus Real-Time)
@@ -148,50 +147,26 @@ LOG:  join order: [ "lineitem" ]
    Tasks Shown: All
    ->  Task
          Node: host=localhost port=57637 dbname=regression
-         ->  Index Scan using lineitem_pkey_290001 on lineitem_290001 lineitem
+         ->  Index Scan using lineitem_pkey_290000 on lineitem_290000 lineitem
                Index Cond: (l_orderkey = 9030)
    ->  Task
          Node: host=localhost port=57638 dbname=regression
-         ->  Index Scan using lineitem_pkey_290000 on lineitem_290000 lineitem
+         ->  Index Scan using lineitem_pkey_290004 on lineitem_290004 lineitem
                Index Cond: (l_orderkey = 9030)
 (11 rows)
 
 EXPLAIN (COSTS FALSE)
 SELECT sum(l_linenumber), avg(l_linenumber) FROM lineitem, orders
-	WHERE l_partkey = o_custkey;
-LOG:  join order: [ "lineitem" ][ dual partition join "orders" ]
-DEBUG:  join prunable for task partitionId 0 and 1
-DEBUG:  join prunable for task partitionId 0 and 2
-DEBUG:  join prunable for task partitionId 0 and 3
-DEBUG:  join prunable for task partitionId 1 and 0
-DEBUG:  join prunable for task partitionId 1 and 2
-DEBUG:  join prunable for task partitionId 1 and 3
-DEBUG:  join prunable for task partitionId 2 and 0
-DEBUG:  join prunable for task partitionId 2 and 1
-DEBUG:  join prunable for task partitionId 2 and 3
-DEBUG:  join prunable for task partitionId 3 and 0
-DEBUG:  join prunable for task partitionId 3 and 1
-DEBUG:  join prunable for task partitionId 3 and 2
-DEBUG:  pruning merge fetch taskId 1
-DETAIL:  Creating dependency on merge taskId 3
-DEBUG:  pruning merge fetch taskId 2
-DETAIL:  Creating dependency on merge taskId 3
-DEBUG:  pruning merge fetch taskId 4
-DETAIL:  Creating dependency on merge taskId 6
-DEBUG:  pruning merge fetch taskId 5
-DETAIL:  Creating dependency on merge taskId 6
-DEBUG:  pruning merge fetch taskId 7
-DETAIL:  Creating dependency on merge taskId 9
-DEBUG:  pruning merge fetch taskId 8
-DETAIL:  Creating dependency on merge taskId 9
-DEBUG:  pruning merge fetch taskId 10
-DETAIL:  Creating dependency on merge taskId 12
-DEBUG:  pruning merge fetch taskId 11
-DETAIL:  Creating dependency on merge taskId 12
-DEBUG:  cannot use real time executor with repartition jobs
-HINT:  Since you enabled citus.enable_repartition_joins Citus chose to use task-tracker.
-                            QUERY PLAN                             
--------------------------------------------------------------------
+	WHERE l_orderkey = o_orderkey;
+DEBUG:  join prunable for intervals [1509,2951] and [8997,14946]
+DEBUG:  join prunable for intervals [2951,4455] and [8997,14946]
+DEBUG:  join prunable for intervals [4480,5986] and [8997,14946]
+DEBUG:  join prunable for intervals [8997,10560] and [1,5986]
+DEBUG:  join prunable for intervals [10560,12036] and [1,5986]
+DEBUG:  join prunable for intervals [12036,13473] and [1,5986]
+DEBUG:  join prunable for intervals [13473,14947] and [1,5986]
+                                              QUERY PLAN                                              
+------------------------------------------------------------------------------------------------------
  Aggregate
    ->  Custom Scan (Citus Real-Time)
          Task Count: 9
@@ -200,9 +175,9 @@ HINT:  Since you enabled citus.enable_repartition_joins Citus chose to use task-
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
+                           ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
                            ->  Index Only Scan using lineitem_pkey_290001 on lineitem_290001 lineitem
-                           ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
          ->  Task
                Node: host=localhost port=57638 dbname=regression
                ->  Aggregate
@@ -214,64 +189,62 @@ HINT:  Since you enabled citus.enable_repartition_joins Citus chose to use task-
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
+                           ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
                            ->  Index Only Scan using lineitem_pkey_290003 on lineitem_290003 lineitem
-                           ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
          ->  Task
                Node: host=localhost port=57638 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
+                           ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
                            ->  Index Only Scan using lineitem_pkey_290000 on lineitem_290000 lineitem
-                           ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
          ->  Task
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
+                           ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
                            ->  Index Only Scan using lineitem_pkey_290005 on lineitem_290005 lineitem
-                           ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
          ->  Task
                Node: host=localhost port=57638 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
-                           ->  Index Only Scan using lineitem_pkey_290002 on lineitem_290002 lineitem
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
                            ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
+                           ->  Index Only Scan using lineitem_pkey_290002 on lineitem_290002 lineitem
          ->  Task
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
-                           ->  Index Only Scan using lineitem_pkey_290007 on lineitem_290007 lineitem
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
                            ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
+                           ->  Index Only Scan using lineitem_pkey_290007 on lineitem_290007 lineitem
          ->  Task
                Node: host=localhost port=57638 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
-                           ->  Index Only Scan using lineitem_pkey_290004 on lineitem_290004 lineitem
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
                            ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
+                           ->  Index Only Scan using lineitem_pkey_290004 on lineitem_290004 lineitem
          ->  Task
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
-                           ->  Index Only Scan using lineitem_pkey_290006 on lineitem_290006 lineitem
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
                            ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
+                           ->  Index Only Scan using lineitem_pkey_290006 on lineitem_290006 lineitem
 (67 rows)
 
 -- Next, set the maximum value for another shard to null. Then check that we
--- don't apply partition or join pruning for this other shard either. Since it
--- is not supported with single-repartition join, dual-repartition has been used.
+-- don't apply partition or join pruning for this other shard either.
 UPDATE pg_dist_shard SET shardmaxvalue = NULL WHERE shardid = 290001;
 EXPLAIN (COSTS FALSE)
 SELECT l_orderkey, l_linenumber, l_shipdate FROM lineitem WHERE l_orderkey = 9030;
-LOG:  join order: [ "lineitem" ]
                                   QUERY PLAN                                   
 -------------------------------------------------------------------------------
  Custom Scan (Citus Real-Time)
-   Task Count: 2
+   Task Count: 3
    Tasks Shown: All
    ->  Task
          Node: host=localhost port=57637 dbname=regression
@@ -281,44 +254,23 @@ LOG:  join order: [ "lineitem" ]
          Node: host=localhost port=57638 dbname=regression
          ->  Index Scan using lineitem_pkey_290000 on lineitem_290000 lineitem
                Index Cond: (l_orderkey = 9030)
-(11 rows)
+   ->  Task
+         Node: host=localhost port=57637 dbname=regression
+         ->  Index Scan using lineitem_pkey_290004 on lineitem_290004 lineitem
+               Index Cond: (l_orderkey = 9030)
+(15 rows)
 
 EXPLAIN (COSTS FALSE)
 SELECT sum(l_linenumber), avg(l_linenumber) FROM lineitem, orders
-	WHERE l_partkey = o_custkey;
-LOG:  join order: [ "lineitem" ][ dual partition join "orders" ]
-DEBUG:  join prunable for task partitionId 0 and 1
-DEBUG:  join prunable for task partitionId 0 and 2
-DEBUG:  join prunable for task partitionId 0 and 3
-DEBUG:  join prunable for task partitionId 1 and 0
-DEBUG:  join prunable for task partitionId 1 and 2
-DEBUG:  join prunable for task partitionId 1 and 3
-DEBUG:  join prunable for task partitionId 2 and 0
-DEBUG:  join prunable for task partitionId 2 and 1
-DEBUG:  join prunable for task partitionId 2 and 3
-DEBUG:  join prunable for task partitionId 3 and 0
-DEBUG:  join prunable for task partitionId 3 and 1
-DEBUG:  join prunable for task partitionId 3 and 2
-DEBUG:  pruning merge fetch taskId 1
-DETAIL:  Creating dependency on merge taskId 3
-DEBUG:  pruning merge fetch taskId 2
-DETAIL:  Creating dependency on merge taskId 3
-DEBUG:  pruning merge fetch taskId 4
-DETAIL:  Creating dependency on merge taskId 6
-DEBUG:  pruning merge fetch taskId 5
-DETAIL:  Creating dependency on merge taskId 6
-DEBUG:  pruning merge fetch taskId 7
-DETAIL:  Creating dependency on merge taskId 9
-DEBUG:  pruning merge fetch taskId 8
-DETAIL:  Creating dependency on merge taskId 9
-DEBUG:  pruning merge fetch taskId 10
-DETAIL:  Creating dependency on merge taskId 12
-DEBUG:  pruning merge fetch taskId 11
-DETAIL:  Creating dependency on merge taskId 12
-DEBUG:  cannot use real time executor with repartition jobs
-HINT:  Since you enabled citus.enable_repartition_joins Citus chose to use task-tracker.
-                            QUERY PLAN                             
--------------------------------------------------------------------
+	WHERE l_orderkey = o_orderkey;
+DEBUG:  join prunable for intervals [2951,4455] and [8997,14946]
+DEBUG:  join prunable for intervals [4480,5986] and [8997,14946]
+DEBUG:  join prunable for intervals [8997,10560] and [1,5986]
+DEBUG:  join prunable for intervals [10560,12036] and [1,5986]
+DEBUG:  join prunable for intervals [12036,13473] and [1,5986]
+DEBUG:  join prunable for intervals [13473,14947] and [1,5986]
+                                              QUERY PLAN                                              
+------------------------------------------------------------------------------------------------------
  Aggregate
    ->  Custom Scan (Citus Real-Time)
          Task Count: 10
@@ -327,9 +279,9 @@ HINT:  Since you enabled citus.enable_repartition_joins Citus chose to use task-
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
-                           ->  Index Only Scan using lineitem_pkey_290001 on lineitem_290001 lineitem
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
                            ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
+                           ->  Index Only Scan using lineitem_pkey_290001 on lineitem_290001 lineitem
          ->  Task
                Node: host=localhost port=57638 dbname=regression
                ->  Aggregate
@@ -341,115 +293,92 @@ HINT:  Since you enabled citus.enable_repartition_joins Citus chose to use task-
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
-                           ->  Index Only Scan using lineitem_pkey_290001 on lineitem_290001 lineitem
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
                            ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
+                           ->  Index Only Scan using lineitem_pkey_290001 on lineitem_290001 lineitem
          ->  Task
                Node: host=localhost port=57638 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
-                           ->  Index Only Scan using lineitem_pkey_290000 on lineitem_290000 lineitem
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
                            ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
+                           ->  Index Only Scan using lineitem_pkey_290000 on lineitem_290000 lineitem
          ->  Task
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
+                           ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
                            ->  Index Only Scan using lineitem_pkey_290003 on lineitem_290003 lineitem
-                           ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
          ->  Task
                Node: host=localhost port=57638 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
+                           ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
                            ->  Index Only Scan using lineitem_pkey_290002 on lineitem_290002 lineitem
-                           ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
          ->  Task
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
+                           ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
                            ->  Index Only Scan using lineitem_pkey_290005 on lineitem_290005 lineitem
-                           ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
          ->  Task
                Node: host=localhost port=57638 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
-                           ->  Index Only Scan using lineitem_pkey_290004 on lineitem_290004 lineitem
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
                            ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
+                           ->  Index Only Scan using lineitem_pkey_290004 on lineitem_290004 lineitem
          ->  Task
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
-                           ->  Index Only Scan using lineitem_pkey_290007 on lineitem_290007 lineitem
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
                            ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
+                           ->  Index Only Scan using lineitem_pkey_290007 on lineitem_290007 lineitem
          ->  Task
                Node: host=localhost port=57638 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
-                           ->  Index Only Scan using lineitem_pkey_290006 on lineitem_290006 lineitem
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
                            ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
+                           ->  Index Only Scan using lineitem_pkey_290006 on lineitem_290006 lineitem
 (74 rows)
 
 -- Last, set the minimum value to 0 and check that we don't treat it as null. We
--- should apply partition and join pruning for this shard now. Since it is not
--- supported with single-repartition join, dual-repartition has been used.
+-- should apply partition and join pruning for this shard now.
 UPDATE pg_dist_shard SET shardminvalue = '0' WHERE shardid = 290000;
 EXPLAIN (COSTS FALSE)
 SELECT l_orderkey, l_linenumber, l_shipdate FROM lineitem WHERE l_orderkey = 9030;
-LOG:  join order: [ "lineitem" ]
-DEBUG:  Plan is router executable
                                   QUERY PLAN                                   
 -------------------------------------------------------------------------------
- Custom Scan (Citus Router)
-   Task Count: 1
+ Custom Scan (Citus Real-Time)
+   Task Count: 2
    Tasks Shown: All
    ->  Task
          Node: host=localhost port=57637 dbname=regression
          ->  Index Scan using lineitem_pkey_290001 on lineitem_290001 lineitem
                Index Cond: (l_orderkey = 9030)
-(7 rows)
+   ->  Task
+         Node: host=localhost port=57638 dbname=regression
+         ->  Index Scan using lineitem_pkey_290004 on lineitem_290004 lineitem
+               Index Cond: (l_orderkey = 9030)
+(11 rows)
 
 EXPLAIN (COSTS FALSE)
 SELECT sum(l_linenumber), avg(l_linenumber) FROM lineitem, orders
-	WHERE l_partkey = o_custkey;
-LOG:  join order: [ "lineitem" ][ dual partition join "orders" ]
-DEBUG:  join prunable for task partitionId 0 and 1
-DEBUG:  join prunable for task partitionId 0 and 2
-DEBUG:  join prunable for task partitionId 0 and 3
-DEBUG:  join prunable for task partitionId 1 and 0
-DEBUG:  join prunable for task partitionId 1 and 2
-DEBUG:  join prunable for task partitionId 1 and 3
-DEBUG:  join prunable for task partitionId 2 and 0
-DEBUG:  join prunable for task partitionId 2 and 1
-DEBUG:  join prunable for task partitionId 2 and 3
-DEBUG:  join prunable for task partitionId 3 and 0
-DEBUG:  join prunable for task partitionId 3 and 1
-DEBUG:  join prunable for task partitionId 3 and 2
-DEBUG:  pruning merge fetch taskId 1
-DETAIL:  Creating dependency on merge taskId 3
-DEBUG:  pruning merge fetch taskId 2
-DETAIL:  Creating dependency on merge taskId 3
-DEBUG:  pruning merge fetch taskId 4
-DETAIL:  Creating dependency on merge taskId 6
-DEBUG:  pruning merge fetch taskId 5
-DETAIL:  Creating dependency on merge taskId 6
-DEBUG:  pruning merge fetch taskId 7
-DETAIL:  Creating dependency on merge taskId 9
-DEBUG:  pruning merge fetch taskId 8
-DETAIL:  Creating dependency on merge taskId 9
-DEBUG:  pruning merge fetch taskId 10
-DETAIL:  Creating dependency on merge taskId 12
-DEBUG:  pruning merge fetch taskId 11
-DETAIL:  Creating dependency on merge taskId 12
-DEBUG:  cannot use real time executor with repartition jobs
-HINT:  Since you enabled citus.enable_repartition_joins Citus chose to use task-tracker.
-                            QUERY PLAN                             
--------------------------------------------------------------------
+	WHERE l_orderkey = o_orderkey;
+DEBUG:  join prunable for intervals [0,1509] and [8997,14946]
+DEBUG:  join prunable for intervals [2951,4455] and [8997,14946]
+DEBUG:  join prunable for intervals [4480,5986] and [8997,14946]
+DEBUG:  join prunable for intervals [8997,10560] and [1,5986]
+DEBUG:  join prunable for intervals [10560,12036] and [1,5986]
+DEBUG:  join prunable for intervals [12036,13473] and [1,5986]
+DEBUG:  join prunable for intervals [13473,14947] and [1,5986]
+                                              QUERY PLAN                                              
+------------------------------------------------------------------------------------------------------
  Aggregate
    ->  Custom Scan (Citus Real-Time)
          Task Count: 9
@@ -458,9 +387,9 @@ HINT:  Since you enabled citus.enable_repartition_joins Citus chose to use task-
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
-                           ->  Index Only Scan using lineitem_pkey_290001 on lineitem_290001 lineitem
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
                            ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
+                           ->  Index Only Scan using lineitem_pkey_290001 on lineitem_290001 lineitem
          ->  Task
                Node: host=localhost port=57638 dbname=regression
                ->  Aggregate
@@ -472,54 +401,54 @@ HINT:  Since you enabled citus.enable_repartition_joins Citus chose to use task-
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
+                           ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
                            ->  Index Only Scan using lineitem_pkey_290001 on lineitem_290001 lineitem
-                           ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
          ->  Task
                Node: host=localhost port=57638 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
+                           ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
                            ->  Index Only Scan using lineitem_pkey_290002 on lineitem_290002 lineitem
-                           ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
          ->  Task
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
+                           ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
                            ->  Index Only Scan using lineitem_pkey_290003 on lineitem_290003 lineitem
-                           ->  Index Only Scan using orders_pkey_290008 on orders_290008 orders
          ->  Task
                Node: host=localhost port=57638 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
+                           ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
                            ->  Index Only Scan using lineitem_pkey_290004 on lineitem_290004 lineitem
-                           ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
          ->  Task
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
-                           ->  Index Only Scan using lineitem_pkey_290005 on lineitem_290005 lineitem
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
                            ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
+                           ->  Index Only Scan using lineitem_pkey_290005 on lineitem_290005 lineitem
          ->  Task
                Node: host=localhost port=57638 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
-                           ->  Index Only Scan using lineitem_pkey_290006 on lineitem_290006 lineitem
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
                            ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
+                           ->  Index Only Scan using lineitem_pkey_290006 on lineitem_290006 lineitem
          ->  Task
                Node: host=localhost port=57637 dbname=regression
                ->  Aggregate
                      ->  Merge Join
-                           Merge Cond: (lineitem.l_orderkey = orders.o_orderkey)
-                           ->  Index Only Scan using lineitem_pkey_290007 on lineitem_290007 lineitem
+                           Merge Cond: (orders.o_orderkey = lineitem.l_orderkey)
                            ->  Index Only Scan using orders_pkey_290009 on orders_290009 orders
+                           ->  Index Only Scan using lineitem_pkey_290007 on lineitem_290007 lineitem
 (67 rows)
 
 -- Set minimum and maximum values for two shards back to their original values
 UPDATE pg_dist_shard SET shardminvalue = '1' WHERE shardid = 290000;
-UPDATE pg_dist_shard SET shardmaxvalue = '14947' WHERE shardid = 290001;
+UPDATE pg_dist_shard SET shardmaxvalue = '4964' WHERE shardid = 290001;
 SET client_min_messages TO NOTICE;
