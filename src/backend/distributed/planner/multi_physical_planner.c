@@ -2055,7 +2055,6 @@ SubquerySqlTaskList(Job *job, PlannerRestrictionContext *plannerRestrictionConte
 	Query *subquery = job->jobQuery;
 	uint64 jobId = job->jobId;
 	List *sqlTaskList = NIL;
-	List *rangeTableList = NIL;
 	ListCell *restrictionCell = NULL;
 	uint32 taskIdIndex = 1; /* 0 is reserved for invalid taskId */
 	int shardCount = 0;
@@ -2070,9 +2069,6 @@ SubquerySqlTaskList(Job *job, PlannerRestrictionContext *plannerRestrictionConte
 
 	/* error if shards are not co-partitioned */
 	ErrorIfUnsupportedShardDistribution(subquery);
-
-	/* get list of all range tables in subquery tree */
-	ExtractRangeTableRelationWalker((Node *) subquery, &rangeTableList);
 
 	if (list_length(relationRestrictionContext->relationRestrictionList) == 0)
 	{
@@ -2361,11 +2357,7 @@ ShardIntervalsEqual(FmgrInfo *comparisonFunction, ShardInterval *firstInterval,
 
 /*
  * SubqueryTaskCreate creates a sql task by replacing the target
- * shardInterval's boundary value.. Then performs the normal
- * shard pruning on the subquery via RouterSelectQuery().
- *
- * The function errors out if the subquery is not router select query (i.e.,
- * subqueries with non equi-joins.).
+ * shardInterval's boundary value.
  */
 static Task *
 SubqueryTaskCreate(Query *originalQuery, int shardIndex,
@@ -2384,8 +2376,6 @@ SubqueryTaskCreate(Query *originalQuery, int shardIndex,
 
 	/*
 	 * Add the restriction qual parameter value in all baserestrictinfos.
-	 * Note that this has to be done on a copy, as the originals are needed
-	 * per target shard interval.
 	 */
 	foreach(restrictionCell, restrictionContext->relationRestrictionList)
 	{
@@ -2401,11 +2391,20 @@ SubqueryTaskCreate(Query *originalQuery, int shardIndex,
 		{
 			/* reference table only has one shard */
 			shardInterval = cacheEntry->sortedShardIntervalArray[0];
+
+			/* only use reference table as anchor shard if none exists yet */
+			if (anchorShardId == INVALID_SHARD_ID)
+			{
+				anchorShardId = shardInterval->shardId;
+			}
 		}
 		else
 		{
 			/* use the shard from a specific index */
 			shardInterval = cacheEntry->sortedShardIntervalArray[shardIndex];
+
+			/* use a shard from a distributed table as the anchor shard */
+			anchorShardId = shardInterval->shardId;
 		}
 
 		taskShardList = lappend(taskShardList, list_make1(shardInterval));
@@ -2415,8 +2414,6 @@ SubqueryTaskCreate(Query *originalQuery, int shardIndex,
 		relationShard->shardId = shardInterval->shardId;
 
 		relationShardList = lappend(relationShardList, relationShard);
-
-		anchorShardId = shardInterval->shardId;
 	}
 
 	selectPlacementList = WorkersContainingAllShards(taskShardList);
