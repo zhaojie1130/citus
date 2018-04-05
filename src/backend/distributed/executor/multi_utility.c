@@ -1683,7 +1683,8 @@ static bool
 IsSupportedDistributedVacuumStmt(VacuumStmt *vacuumStmt)
 {
 	const char *stmtName = (vacuumStmt->options & VACOPT_VACUUM) ? "VACUUM" : "ANALYZE";
-	LOCKMODE lockMode = (vacuumStmt->options & VACOPT_FULL) ? AccessExclusiveLock : ShareUpdateExclusiveLock;
+	LOCKMODE lockMode = (vacuumStmt->options & VACOPT_FULL) ? AccessExclusiveLock :
+						ShareUpdateExclusiveLock;
 	bool distributeStmt = false;
 	List *relationIdList = NIL;
 	ListCell *relationIdCell = NULL;
