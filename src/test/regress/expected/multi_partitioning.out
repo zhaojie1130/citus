@@ -9,7 +9,7 @@ SHOW server_version \gset
 SELECT substring(:'server_version', '\d+')::int AS server_version;
  server_version 
 ----------------
-             10
+             11
 (1 row)
 
 --
@@ -307,8 +307,8 @@ SELECT * FROM partitioning_test WHERE id = 7 OR id = 8 ORDER BY 1;
 
 -- UPDATE that tries to move a row to a non-existing partition (this should fail)
 UPDATE partitioning_test SET time = '2020-07-07' WHERE id = 7;
-ERROR:  new row for relation "partitioning_test_2013_1660021" violates partition constraint
-DETAIL:  Failing row contains (7, 2020-07-07).
+ERROR:  no partition of relation "partitioning_test_1660001" found for row
+DETAIL:  Partition key of the failing row contains ("time") = (2020-07-07).
 CONTEXT:  while executing command on localhost:57638
 -- UPDATE with subqueries on partitioned table
 UPDATE
@@ -410,19 +410,24 @@ CONTEXT:  while executing command on localhost:57638
 --
 -- test CREATE INDEX
 -- CREATE INDEX on partitioned table - this will error out
+-- on earlier versions of postgres.
 CREATE INDEX partitioning_index ON partitioning_test(id);
-ERROR:  cannot create index on partitioned table "partitioning_test"
 -- CREATE INDEX on partition
 CREATE INDEX partitioning_2009_index ON partitioning_test_2009(id);
 -- CREATE INDEX CONCURRENTLY on partition
 CREATE INDEX CONCURRENTLY partitioned_2010_index ON partitioning_test_2010(id);
 -- see index is created
 SELECT tablename, indexname FROM pg_indexes WHERE tablename LIKE 'partitioning_test%' ORDER BY indexname;
-       tablename        |        indexname        
-------------------------+-------------------------
+       tablename        |           indexname           
+------------------------+-------------------------------
  partitioning_test_2010 | partitioned_2010_index
  partitioning_test_2009 | partitioning_2009_index
-(2 rows)
+ partitioning_test_2009 | partitioning_test_2009_id_idx
+ partitioning_test_2010 | partitioning_test_2010_id_idx
+ partitioning_test_2011 | partitioning_test_2011_id_idx
+ partitioning_test_2012 | partitioning_test_2012_id_idx
+ partitioning_test_2013 | partitioning_test_2013_id_idx
+(7 rows)
 
 -- test add COLUMN
 -- add COLUMN to partitioned table
@@ -450,9 +455,8 @@ SELECT name, type FROM table_attrs WHERE relid = 'partitioning_test_2010'::regcl
 -- test add PRIMARY KEY
 -- add PRIMARY KEY to partitioned table - this will error out
 ALTER TABLE partitioning_test ADD CONSTRAINT partitioning_primary PRIMARY KEY (id);
-ERROR:  primary key constraints are not supported on partitioned tables
-LINE 1: ALTER TABLE partitioning_test ADD CONSTRAINT partitioning_pr...
-                                          ^
+ERROR:  insufficient columns in PRIMARY KEY constraint definition
+DETAIL:  PRIMARY KEY constraint on table "partitioning_test" lacks column "time" which is part of the partition key.
 -- ADD PRIMARY KEY to partition
 ALTER TABLE partitioning_test_2009 ADD CONSTRAINT partitioning_2009_primary PRIMARY KEY (id);
 -- see PRIMARY KEY is created
@@ -473,9 +477,7 @@ WHERE
 -- test ADD FOREIGN CONSTRAINT
 -- add FOREIGN CONSTRAINT to partitioned table -- this will error out
 ALTER TABLE partitioning_test ADD CONSTRAINT partitioning_foreign FOREIGN KEY (id) REFERENCES partitioning_test_2009 (id);
-ERROR:  foreign key constraints are not supported on partitioned tables
-LINE 1: ALTER TABLE partitioning_test ADD CONSTRAINT partitioning_fo...
-                                          ^
+ERROR:  cannot ALTER TABLE "partitioning_test_2009" because it is being used by active queries in this session
 -- add FOREIGN CONSTRAINT to partition
 INSERT INTO partitioning_test_2009 VALUES (5, '2009-06-06');
 INSERT INTO partitioning_test_2009 VALUES (6, '2009-07-07');
