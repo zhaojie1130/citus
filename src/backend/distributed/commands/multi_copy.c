@@ -1285,8 +1285,24 @@ ConversionPathForTypes(Oid inputType, Oid destType, CopyCoercionData *result)
 
 		case COERCION_PATH_ARRAYCOERCE:
 		{
-			ereport(ERROR, (errmsg("can not run query which uses an implicit coercion"
-								   " between array types")));
+			Oid inputBaseType = get_base_element_type(inputType);
+			Oid destBaseType = get_base_element_type(destType);
+			CoercionPathType baseCoercionType = COERCION_PATH_NONE;
+
+			if (inputBaseType != InvalidOid && destBaseType != InvalidOid)
+			{
+				baseCoercionType = find_coercion_pathway(inputBaseType, destBaseType,
+														 COERCION_EXPLICIT,
+														 &coercionFuncId);
+			}
+
+			if (baseCoercionType != COERCION_PATH_COERCEVIAIO)
+			{
+				ereport(ERROR, (errmsg("can not run query which uses an implicit coercion"
+									   " between array types")));
+			}
+
+			/* fallthrough */
 		}
 
 		case COERCION_PATH_COERCEVIAIO:
