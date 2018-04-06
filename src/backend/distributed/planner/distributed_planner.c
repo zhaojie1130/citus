@@ -639,6 +639,11 @@ CreateDistributedSelectPlan(uint64 planId, Query *originalQuery, Query *query,
 		return NULL;
 	}
 
+	/* force evaluation of bound params */
+#if (PG_VERSION_NUM >= 110000)
+	boundParams = copyParamList(boundParams);
+#endif
+
 	/*
 	 * If there are parameters that do have a value in boundParams, replace
 	 * them in the original query. This allows us to more easily cut the

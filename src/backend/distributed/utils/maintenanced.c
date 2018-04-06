@@ -276,7 +276,11 @@ CitusMaintenanceDaemonMain(Datum main_arg)
 		 databaseOid, myDbData->userOid);
 
 	/* connect to database, after that we can actually access catalogs */
+#if (PG_VERSION_NUM >= 110000)
+	BackgroundWorkerInitializeConnectionByOid(databaseOid, myDbData->userOid, 0);
+#else
 	BackgroundWorkerInitializeConnectionByOid(databaseOid, myDbData->userOid);
+#endif
 
 	/* make worker recognizable in pg_stat_activity */
 	pgstat_report_appname("Citus Maintenance Daemon");

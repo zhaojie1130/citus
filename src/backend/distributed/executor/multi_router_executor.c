@@ -1260,6 +1260,11 @@ SendQueryInSingleRowMode(MultiConnection *connection, char *query,
 		Oid *parameterTypes = NULL;
 		const char **parameterValues = NULL;
 
+		/* force evaluation of bound params */
+#if (PG_VERSION_NUM >= 110000)
+		paramListInfo = copyParamList(paramListInfo);
+#endif
+
 		ExtractParametersFromParamListInfo(paramListInfo, &parameterTypes,
 										   &parameterValues);
 
