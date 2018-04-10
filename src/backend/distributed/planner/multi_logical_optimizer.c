@@ -127,6 +127,13 @@ static Expr * MasterAverageExpression(Oid sumAggregateType, Oid countAggregateTy
 static Expr * AddTypeConversion(Node *originalAggregate, Node *newExpression);
 static MultiExtendedOp * WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 											  ExtendedOpNodeStats *extendedOpNodeStats);
+static void ProcessWorkerExpressionList(List *expressionList,
+										TargetEntry *originalTargetEntry,
+										bool addToGroupByClause,
+										List **newTargetEntryList,
+										AttrNumber *targetProjectionNumber,
+										List **groupClauseList,
+										Index *nextSortGroupRefIndex);
 static Index GetNextSortGroupRef(List *targetEntryList);
 static TargetEntry * GenerateWorkerTargetEntry(TargetEntry *targetEntry,
 											   Expr *workerExpression,
@@ -1835,7 +1842,7 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 	bool queryHasAggregates = false;
 	bool distinctClauseSupersetofGroupClause = false;
 	bool distinctPreventsLimitPushdown = false;
-	bool createdNewGroupByClause = false;
+	bool createNewGroupByClause = false;
 	bool groupedByDisjointPartitionColumn =
 		extendedOpNodeStats->groupedByDisjointPartitionColumn;
 	bool pushDownWindowFunction = extendedOpNodeStats->pushDownWindowFunctions;
@@ -1851,7 +1858,6 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 		TargetEntry *originalTargetEntry = (TargetEntry *) lfirst(targetEntryCell);
 		Expr *originalExpression = originalTargetEntry->expr;
 		List *newExpressionList = NIL;
-		ListCell *newExpressionCell = NULL;
 		bool hasAggregates = contain_agg_clause((Node *) originalExpression);
 		bool hasWindowFunction = contain_window_function((Node *) originalExpression);
 
@@ -1876,41 +1882,19 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 			newExpressionList = list_make1(originalExpression);
 		}
 
-		/* now create target entries for each new expression */
-		foreach(newExpressionCell, newExpressionList)
-		{
-			Expr *newExpression = (Expr *) lfirst(newExpressionCell);
-			TargetEntry *newTargetEntry = NULL;
+		createNewGroupByClause = walkerContext->createGroupByClause;
 
-			/* generate and add the new target entry to the target list */
-			newTargetEntry =
-				GenerateWorkerTargetEntry(originalTargetEntry, newExpression,
-										  targetProjectionNumber);
-			targetProjectionNumber++;
-			newTargetEntryList = lappend(newTargetEntryList, newTargetEntry);
-
-			/*
-			 * Detect new targets of type Var and add it to group clause list.
-			 * This case is expected only if the target entry has aggregates and
-			 * it is inside a repartitioned subquery. We create group by entry
-			 * for each Var in target list. This code does not check if this
-			 * Var was already in the target list or in group by clauses.
-			 */
-			if (IsA(newExpression, Var) && walkerContext->createGroupByClause)
-			{
-				AppendTargetEntryToGroupClause(newTargetEntry, &groupClauseList,
-											   &nextSortGroupRefIndex);
-
-				createdNewGroupByClause = true;
-			}
-		}
+		ProcessWorkerExpressionList(newExpressionList, originalTargetEntry,
+									createNewGroupByClause, &newTargetEntryList,
+									&targetProjectionNumber, &groupClauseList,
+									&nextSortGroupRefIndex);
 	}
 
 	/* we also need to add having expressions to worker target list */
 	if (havingQual != NULL)
 	{
 		List *newExpressionList = NIL;
-		ListCell *newExpressionCell = NULL;
+		TargetEntry *targetEntry = NULL;
 
 		/* reset walker context */
 		walkerContext->expressionList = NIL;
@@ -1919,29 +1903,12 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 		WorkerAggregateWalker(havingQual, walkerContext);
 		newExpressionList = walkerContext->expressionList;
 
-		/* now create target entries for each new expression */
-		foreach(newExpressionCell, newExpressionList)
-		{
-			Expr *newExpression = (Expr *) lfirst(newExpressionCell);
-			TargetEntry *newTargetEntry = NULL;
+		createNewGroupByClause = walkerContext->createGroupByClause;
 
-			/*
-			 * Generate and add the new target entry to the target list. Note that the
-			 * function is responsible for allocating a new target entry.
-			 */
-			newTargetEntry =
-				GenerateWorkerTargetEntry(NULL, newExpression, targetProjectionNumber);
-			targetProjectionNumber++;
-			newTargetEntryList = lappend(newTargetEntryList, newTargetEntry);
-
-			if (IsA(newExpression, Var) && walkerContext->createGroupByClause)
-			{
-				AppendTargetEntryToGroupClause(newTargetEntry, &groupClauseList,
-											   &nextSortGroupRefIndex);
-
-				createdNewGroupByClause = true;
-			}
-		}
+		ProcessWorkerExpressionList(newExpressionList, targetEntry,
+									createNewGroupByClause, &newTargetEntryList,
+									&targetProjectionNumber, &groupClauseList,
+									&nextSortGroupRefIndex);
 	}
 
 	workerExtendedOpNode = CitusMakeNode(MultiExtendedOp);
@@ -1994,7 +1961,7 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 	 * (1) We do not create a new group by clause during aggregate mutation, and
 	 * (2) There distinct clause does not prevent limit pushdown
 	 */
-	if (!createdNewGroupByClause && !distinctPreventsLimitPushdown)
+	if (!createNewGroupByClause && !distinctPreventsLimitPushdown)
 	{
 		List *newTargetEntryListForSortClauses = NIL;
 
@@ -2061,6 +2028,57 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 	}
 
 	return workerExtendedOpNode;
+}
+
+
+/*
+ * ProcessWorkerExpressionList is a utility function which processes the
+ * expressions that are intended to be added to the worker target list.
+ *
+ * In summary, the function gets a list of expressions, converts them to target
+ * entries and updates all the necessary fields such that the expression is correctly
+ * added to the worker query's target list.
+ *
+ * Adding an expression to the target list includes generating a target entry,
+ * appending it to the newTargetEntryList and incrementing the projection number.
+ *
+ * If the expression is requested to be added to the group clause, the entry
+ * is appended to groupClauseList and sort group reference is incremented.
+ */
+static void
+ProcessWorkerExpressionList(List *expressionList, TargetEntry *originalTargetEntry,
+							bool addToGroupByClause, List **newTargetEntryList,
+							AttrNumber *targetProjectionNumber, List **groupClauseList,
+							Index *nextSortGroupRefIndex)
+{
+	ListCell *newExpressionCell = NULL;
+
+	/* now create target entries for each new expression */
+	foreach(newExpressionCell, expressionList)
+	{
+		Expr *newExpression = (Expr *) lfirst(newExpressionCell);
+		TargetEntry *newTargetEntry = NULL;
+
+		/* generate and add the new target entry to the target list */
+		newTargetEntry =
+			GenerateWorkerTargetEntry(originalTargetEntry, newExpression,
+									  *targetProjectionNumber);
+		(*targetProjectionNumber)++;
+		(*newTargetEntryList) = lappend(*newTargetEntryList, newTargetEntry);
+
+		/*
+		 * Detect new targets of type Var and add it to group clause list.
+		 * This case is expected only if the target entry has aggregates and
+		 * it is inside a repartitioned subquery. We create group by entry
+		 * for each Var in target list. This code does not check if this
+		 * Var was already in the target list or in group by clauses.
+		 */
+		if (IsA(newExpression, Var) && addToGroupByClause)
+		{
+			AppendTargetEntryToGroupClause(newTargetEntry, groupClauseList,
+										   nextSortGroupRefIndex);
+		}
+	}
 }
 
 
