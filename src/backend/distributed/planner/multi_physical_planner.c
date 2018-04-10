@@ -2066,6 +2066,13 @@ SubquerySqlTaskList(Job *job, PlannerRestrictionContext *plannerRestrictionConte
 	ListCell *prunedRelationShardCell = NULL;
 	bool isMultiShardQuery = false;
 	bool hasDistributedTable = false;
+	TimestampTz startTime = GetCurrentTimestamp();
+	long		secs;
+	int			usecs;
+	int			msecs;
+	int			hours,
+				minutes,
+				seconds;
 
 	/* error if shards are not co-partitioned */
 	ErrorIfUnsupportedShardDistribution(subquery);
@@ -2080,6 +2087,22 @@ SubquerySqlTaskList(Job *job, PlannerRestrictionContext *plannerRestrictionConte
 														   relationRestrictionContext,
 														   &isMultiShardQuery);
 
+	TimestampDifference(startTime,
+						GetCurrentTimestamp(),
+						&secs, &usecs);
+
+	msecs = usecs / 1000;
+
+	hours = secs / SECS_PER_HOUR;
+	secs %= SECS_PER_HOUR;
+	minutes = secs / SECS_PER_MINUTE;
+	seconds = secs % SECS_PER_MINUTE;
+
+	ereport(LOG,
+			(errmsg("Prunning Time: %d:%02d:%02d.%03d "
+					,hours, minutes, seconds, msecs)));
+
+	startTime = GetCurrentTimestamp();
 	forboth(prunedRelationShardCell, prunedRelationShardList,
 			restrictionCell, relationRestrictionContext->relationRestrictionList)
 	{
@@ -2120,11 +2143,28 @@ SubquerySqlTaskList(Job *job, PlannerRestrictionContext *plannerRestrictionConte
 		hasDistributedTable = true;
 	}
 
+
+	TimestampDifference(startTime,
+						GetCurrentTimestamp(),
+						&secs, &usecs);
+
+	msecs = usecs / 1000;
+
+	hours = secs / SECS_PER_HOUR;
+	secs %= SECS_PER_HOUR;
+	minutes = secs / SECS_PER_MINUTE;
+	seconds = secs % SECS_PER_MINUTE;
+
+	ereport(LOG,
+			(errmsg("taskRequiredForShardIndex Time: %d:%02d:%02d.%03d "
+					,hours, minutes, seconds, msecs)));
+
 	if (!hasDistributedTable)
 	{
 		/* query with only reference tables */
 		shardCount = 1;
 	}
+	startTime = GetCurrentTimestamp();
 
 	for (shardOffset = 0; shardOffset < shardCount; shardOffset++)
 	{
@@ -2143,6 +2183,21 @@ SubquerySqlTaskList(Job *job, PlannerRestrictionContext *plannerRestrictionConte
 
 		++taskIdIndex;
 	}
+
+	TimestampDifference(startTime,
+						GetCurrentTimestamp(),
+						&secs, &usecs);
+
+	msecs = usecs / 1000;
+
+	hours = secs / SECS_PER_HOUR;
+	secs %= SECS_PER_HOUR;
+	minutes = secs / SECS_PER_MINUTE;
+	seconds = secs % SECS_PER_MINUTE;
+
+	ereport(LOG,
+			(errmsg("Task Creation Time Time: %d:%02d:%02d.%03d "
+					,hours, minutes, seconds, msecs)));
 
 	return sqlTaskList;
 }
