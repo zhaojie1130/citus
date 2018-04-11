@@ -127,6 +127,13 @@ static Expr * MasterAverageExpression(Oid sumAggregateType, Oid countAggregateTy
 static Expr * AddTypeConversion(Node *originalAggregate, Node *newExpression);
 static MultiExtendedOp * WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 											  ExtendedOpNodeStats *extendedOpNodeStats);
+static bool TargetListHasAggragates(List *targetEntryList);
+static void ProcessWorkerTargetList(List *targetEntryList,
+									ExtendedOpNodeStats *extendedOpNodeStats,
+									List **newTargetEntryList,
+									AttrNumber *targetProjectionNumber,
+									List **groupClauseList,
+									Index *nextSortGroupRefIndex);
 static void ProcessWorkerExpressionList(List *expressionList,
 										TargetEntry *originalTargetEntry,
 										bool addToGroupByClause,
@@ -1831,84 +1838,49 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 {
 	MultiExtendedOp *workerExtendedOpNode = NULL;
 	List *targetEntryList = originalOpNode->targetList;
-	ListCell *targetEntryCell = NULL;
 	List *newTargetEntryList = NIL;
 	List *groupClauseList = copyObject(originalOpNode->groupClauseList);
 	Node *havingQual = originalOpNode->havingQual;
 	AttrNumber targetProjectionNumber = 1;
-	WorkerAggregateWalkerContext *walkerContext =
-		palloc0(sizeof(WorkerAggregateWalkerContext));
 	Index nextSortGroupRefIndex = 0;
-	bool queryHasAggregates = false;
+	bool queryHasAggregates = TargetListHasAggragates(targetEntryList);
 	bool distinctClauseSupersetofGroupClause = false;
 	bool distinctPreventsLimitPushdown = false;
-	bool createNewGroupByClause = false;
+	bool groupByExtended = false;
 	bool groupedByDisjointPartitionColumn =
 		extendedOpNodeStats->groupedByDisjointPartitionColumn;
 	bool pushDownWindowFunction = extendedOpNodeStats->pushDownWindowFunctions;
+	int originalGroupClauseLength = list_length(originalOpNode->groupClauseList);
 
-	walkerContext->expressionList = NIL;
-	walkerContext->pullDistinctColumns = extendedOpNodeStats->pullDistinctColumns;
-
+	/* calculate the next sort group index based on the original target list */
 	nextSortGroupRefIndex = GetNextSortGroupRef(targetEntryList);
 
-	/* iterate over original target entries */
-	foreach(targetEntryCell, targetEntryList)
-	{
-		TargetEntry *originalTargetEntry = (TargetEntry *) lfirst(targetEntryCell);
-		Expr *originalExpression = originalTargetEntry->expr;
-		List *newExpressionList = NIL;
-		bool hasAggregates = contain_agg_clause((Node *) originalExpression);
-		bool hasWindowFunction = contain_window_function((Node *) originalExpression);
-
-		/* reset walker context */
-		walkerContext->expressionList = NIL;
-		walkerContext->createGroupByClause = false;
-
-		/*
-		 * If the expression uses aggregates inside window function contain agg
-		 * clause still returns true. We want to make sure it is not a part of
-		 * window function before we proceed.
-		 */
-		if (hasAggregates && !hasWindowFunction)
-		{
-			WorkerAggregateWalker((Node *) originalExpression, walkerContext);
-
-			newExpressionList = walkerContext->expressionList;
-			queryHasAggregates = true;
-		}
-		else
-		{
-			newExpressionList = list_make1(originalExpression);
-		}
-
-		createNewGroupByClause = walkerContext->createGroupByClause;
-
-		ProcessWorkerExpressionList(newExpressionList, originalTargetEntry,
-									createNewGroupByClause, &newTargetEntryList,
-									&targetProjectionNumber, &groupClauseList,
-									&nextSortGroupRefIndex);
-	}
+	ProcessWorkerTargetList(targetEntryList, extendedOpNodeStats, &newTargetEntryList,
+							&targetProjectionNumber, &groupClauseList,
+							&nextSortGroupRefIndex);
 
 	/* we also need to add having expressions to worker target list */
 	if (havingQual != NULL)
 	{
 		List *newExpressionList = NIL;
 		TargetEntry *targetEntry = NULL;
+		WorkerAggregateWalkerContext *workerAggContext =
+			palloc0(sizeof(WorkerAggregateWalkerContext));
+
+		workerAggContext->expressionList = NIL;
+		workerAggContext->pullDistinctColumns = extendedOpNodeStats->pullDistinctColumns;
 
 		/* reset walker context */
-		walkerContext->expressionList = NIL;
-		walkerContext->createGroupByClause = false;
+		workerAggContext->expressionList = NIL;
+		workerAggContext->createGroupByClause = false;
 
-		WorkerAggregateWalker(havingQual, walkerContext);
-		newExpressionList = walkerContext->expressionList;
-
-		createNewGroupByClause = walkerContext->createGroupByClause;
+		WorkerAggregateWalker(havingQual, workerAggContext);
+		newExpressionList = workerAggContext->expressionList;
 
 		ProcessWorkerExpressionList(newExpressionList, targetEntry,
-									createNewGroupByClause, &newTargetEntryList,
-									&targetProjectionNumber, &groupClauseList,
-									&nextSortGroupRefIndex);
+									workerAggContext->createGroupByClause,
+									&newTargetEntryList, &targetProjectionNumber,
+									&groupClauseList, &nextSortGroupRefIndex);
 	}
 
 	workerExtendedOpNode = CitusMakeNode(MultiExtendedOp);
@@ -1961,7 +1933,8 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 	 * (1) We do not create a new group by clause during aggregate mutation, and
 	 * (2) There distinct clause does not prevent limit pushdown
 	 */
-	if (!createNewGroupByClause && !distinctPreventsLimitPushdown)
+	groupByExtended = list_length(groupClauseList) > originalGroupClauseLength;
+	if (!groupByExtended && !distinctPreventsLimitPushdown)
 	{
 		List *newTargetEntryListForSortClauses = NIL;
 
@@ -2028,6 +2001,96 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 	}
 
 	return workerExtendedOpNode;
+}
+
+
+/*
+ * ProcessWorkerTargetList gets the inputs and modify the outputs in a way that
+ * the worker query's target list and group by clauses are started to be
+ * generated based on the inputs.
+ *
+ *     inputs: targetEntryList, extendedOpNodeStats
+ *     outputs: newTargetEntryList, targetProjectionNumber, groupClauseList,
+ *              nextSortGroupRefIndex
+ */
+static void
+ProcessWorkerTargetList(List *targetEntryList, ExtendedOpNodeStats *extendedOpNodeStats,
+						List **newTargetEntryList, AttrNumber *targetProjectionNumber,
+						List **groupClauseList, Index *nextSortGroupRefIndex)
+{
+	ListCell *targetEntryCell = NULL;
+	WorkerAggregateWalkerContext *workerAggContext =
+		palloc0(sizeof(WorkerAggregateWalkerContext));
+
+	workerAggContext->expressionList = NIL;
+	workerAggContext->pullDistinctColumns = extendedOpNodeStats->pullDistinctColumns;
+
+	/* iterate over original target entries */
+	foreach(targetEntryCell, targetEntryList)
+	{
+		TargetEntry *originalTargetEntry = (TargetEntry *) lfirst(targetEntryCell);
+		Expr *originalExpression = originalTargetEntry->expr;
+		List *newExpressionList = NIL;
+		bool hasAggregates = contain_agg_clause((Node *) originalExpression);
+		bool hasWindowFunction = contain_window_function((Node *) originalExpression);
+
+		/* reset walker context */
+		workerAggContext->expressionList = NIL;
+		workerAggContext->createGroupByClause = false;
+
+		/*
+		 * If the expression uses aggregates inside window function contain agg
+		 * clause still returns true. We want to make sure it is not a part of
+		 * window function before we proceed.
+		 */
+		if (hasAggregates && !hasWindowFunction)
+		{
+			WorkerAggregateWalker((Node *) originalExpression, workerAggContext);
+
+			newExpressionList = workerAggContext->expressionList;
+		}
+		else
+		{
+			newExpressionList = list_make1(originalExpression);
+		}
+
+		ProcessWorkerExpressionList(newExpressionList, originalTargetEntry,
+									workerAggContext->createGroupByClause,
+									newTargetEntryList, targetProjectionNumber,
+									groupClauseList, nextSortGroupRefIndex);
+	}
+}
+
+
+/*
+ * TargetListHasAggragates returns true if any of the elements in the
+ * target list contain aggragates that are not inside the window functions.
+ */
+static bool
+TargetListHasAggragates(List *targetEntryList)
+{
+	ListCell *targetEntryCell = NULL;
+
+	/* iterate over original target entries */
+	foreach(targetEntryCell, targetEntryList)
+	{
+		TargetEntry *targetEntry = (TargetEntry *) lfirst(targetEntryCell);
+		Expr *targetExpr = targetEntry->expr;
+		bool hasAggregates = contain_agg_clause((Node *) targetExpr);
+		bool hasWindowFunction = contain_window_function((Node *) targetExpr);
+
+		/*
+		 * If the expression uses aggregates inside window function contain agg
+		 * clause still returns true. We want to make sure it is not a part of
+		 * window function before we proceed.
+		 */
+		if (hasAggregates && !hasWindowFunction)
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 
