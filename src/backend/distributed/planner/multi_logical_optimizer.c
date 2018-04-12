@@ -139,6 +139,10 @@ static void ProcessHavingClause(Node *havingQual,
 								List **newTargetEntryList,
 								AttrNumber *targetProjectionNumber,
 								List **groupClauseList, Index *nextSortGroupRefIndex);
+static void PrcoessDistinctClause(List *distinctClause, bool hasDistinctOn,
+								  List *groupClauseList, bool queryHasAggregates,
+								  List **workerDistinctClause, bool *workerHasDistinctOn,
+								  bool *distinctPreventsLimitPushdown);
 static void ProcessWorkerExpressionList(List *expressionList,
 										TargetEntry *originalTargetEntry,
 										bool addToGroupByClause,
@@ -1849,7 +1853,6 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 	AttrNumber targetProjectionNumber = 1;
 	Index nextSortGroupRefIndex = 0;
 	bool queryHasAggregates = TargetListHasAggragates(targetEntryList);
-	bool distinctClauseSupersetofGroupClause = false;
 	bool distinctPreventsLimitPushdown = false;
 	bool groupByExtended = false;
 	bool groupedByDisjointPartitionColumn =
@@ -1875,43 +1878,11 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 	workerExtendedOpNode->windowClause = originalOpNode->windowClause;
 	workerExtendedOpNode->groupClauseList = groupClauseList;
 
-	if (originalOpNode->distinctClause)
-	{
-		bool shouldPushdownDistinct = false;
-		if (groupClauseList == NIL ||
-			IsGroupBySubsetOfDistinct(groupClauseList,
-									  originalOpNode->distinctClause))
-		{
-			distinctClauseSupersetofGroupClause = true;
-		}
-		else
-		{
-			distinctClauseSupersetofGroupClause = false;
-
-			/*
-			 * GROUP BY being a subset of DISTINCT guarantees the
-			 * distinctness on the workers. Otherwise, pushing down
-			 * LIMIT might cause missing the necessary data from
-			 * the worker query
-			 */
-			distinctPreventsLimitPushdown = true;
-		}
-
-		/*
-		 * Distinct is pushed down to worker query only if the query does not
-		 * contain an aggregate in which master processing might be required to
-		 * complete the final result before distinct operation. We also prevent
-		 * distinct pushdown if distinct clause is missing some entries that
-		 * group by clause has.
-		 */
-		shouldPushdownDistinct = !queryHasAggregates &&
-								 distinctClauseSupersetofGroupClause;
-		if (shouldPushdownDistinct)
-		{
-			workerExtendedOpNode->distinctClause = originalOpNode->distinctClause;
-			workerExtendedOpNode->hasDistinctOn = originalOpNode->hasDistinctOn;
-		}
-	}
+	PrcoessDistinctClause(originalOpNode->distinctClause, originalOpNode->hasDistinctOn,
+						  groupClauseList, queryHasAggregates,
+						  &workerExtendedOpNode->distinctClause,
+						  &workerExtendedOpNode->hasDistinctOn,
+						  &distinctPreventsLimitPushdown);
 
 	/*
 	 * Order by and limit clauses are pushed down only if
@@ -2087,6 +2058,67 @@ ProcessHavingClause(Node *havingQual, ExtendedOpNodeStats *extendedOpNodeStats,
 								workerAggContext->createGroupByClause,
 								newTargetEntryList, targetProjectionNumber,
 								groupClauseList, nextSortGroupRefIndex);
+}
+
+
+/*
+ * PrcoessDistinctClause gets the inputs and modifies the outputs in a way
+ * that worker query's DISTINCT and DISTINCT ON clauses are set accordingly.
+ * The function also sets distinctPreventsLimitPushdown. As the name reveals,
+ * distinct could prevent pushwing down LIMIT clauses later in the planning.
+ * For the details, see the comments in the function.
+ *
+ *     inputs: distinctClause, hasDistinctOn, groupClauseList, queryHasAggregates
+ *     outputs: workerDistinctClause, workerHasDistinctOn, distinctPreventsLimitPushdown
+ *
+ */
+static void
+PrcoessDistinctClause(List *distinctClause, bool hasDistinctOn, List *groupClauseList,
+					  bool queryHasAggregates, List **workerDistinctClause,
+					  bool *workerHasDistinctOn, bool *distinctPreventsLimitPushdown)
+{
+	bool distinctClauseSupersetofGroupClause = false;
+	bool shouldPushdownDistinct = false;
+
+	if (distinctClause == NIL)
+	{
+		return;
+	}
+
+	*distinctPreventsLimitPushdown = false;
+
+	if (groupClauseList == NIL ||
+		IsGroupBySubsetOfDistinct(groupClauseList, distinctClause))
+	{
+		distinctClauseSupersetofGroupClause = true;
+	}
+	else
+	{
+		distinctClauseSupersetofGroupClause = false;
+
+		/*
+		 * GROUP BY being a subset of DISTINCT guarantees the
+		 * distinctness on the workers. Otherwise, pushing down
+		 * LIMIT might cause missing the necessary data from
+		 * the worker query
+		 */
+		*distinctPreventsLimitPushdown = true;
+	}
+
+	/*
+	 * Distinct is pushed down to worker query only if the query does not
+	 * contain an aggregate in which master processing might be required to
+	 * complete the final result before distinct operation. We also prevent
+	 * distinct pushdown if distinct clause is missing some entries that
+	 * group by clause has.
+	 */
+	shouldPushdownDistinct = !queryHasAggregates &&
+							 distinctClauseSupersetofGroupClause;
+	if (shouldPushdownDistinct)
+	{
+		*workerDistinctClause = distinctClause;
+		*workerHasDistinctOn = hasDistinctOn;
+	}
 }
 
 
