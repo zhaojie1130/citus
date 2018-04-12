@@ -134,6 +134,11 @@ static void ProcessWorkerTargetList(List *targetEntryList,
 									AttrNumber *targetProjectionNumber,
 									List **groupClauseList,
 									Index *nextSortGroupRefIndex);
+static void ProcessHavingClause(Node *havingQual,
+								ExtendedOpNodeStats *extendedOpNodeStats,
+								List **newTargetEntryList,
+								AttrNumber *targetProjectionNumber,
+								List **groupClauseList, Index *nextSortGroupRefIndex);
 static void ProcessWorkerExpressionList(List *expressionList,
 										TargetEntry *originalTargetEntry,
 										bool addToGroupByClause,
@@ -1859,29 +1864,9 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 							&targetProjectionNumber, &groupClauseList,
 							&nextSortGroupRefIndex);
 
-	/* we also need to add having expressions to worker target list */
-	if (havingQual != NULL)
-	{
-		List *newExpressionList = NIL;
-		TargetEntry *targetEntry = NULL;
-		WorkerAggregateWalkerContext *workerAggContext =
-			palloc0(sizeof(WorkerAggregateWalkerContext));
-
-		workerAggContext->expressionList = NIL;
-		workerAggContext->pullDistinctColumns = extendedOpNodeStats->pullDistinctColumns;
-
-		/* reset walker context */
-		workerAggContext->expressionList = NIL;
-		workerAggContext->createGroupByClause = false;
-
-		WorkerAggregateWalker(havingQual, workerAggContext);
-		newExpressionList = workerAggContext->expressionList;
-
-		ProcessWorkerExpressionList(newExpressionList, targetEntry,
-									workerAggContext->createGroupByClause,
-									&newTargetEntryList, &targetProjectionNumber,
-									&groupClauseList, &nextSortGroupRefIndex);
-	}
+	ProcessHavingClause(havingQual, extendedOpNodeStats, &newTargetEntryList,
+						&targetProjectionNumber, &groupClauseList,
+						&nextSortGroupRefIndex);
 
 	workerExtendedOpNode = CitusMakeNode(MultiExtendedOp);
 	workerExtendedOpNode->distinctClause = NIL;
@@ -2059,6 +2044,49 @@ ProcessWorkerTargetList(List *targetEntryList, ExtendedOpNodeStats *extendedOpNo
 									newTargetEntryList, targetProjectionNumber,
 									groupClauseList, nextSortGroupRefIndex);
 	}
+}
+
+
+/*
+ * ProcessHavingClause gets the inputs and modify the outputs in a way that
+ * the worker query's target list and group by clauses are extended to be
+ * generated based on the inputs. The rationale is that Citus may need to apply
+ * the HAVING clause on the coordinator. Thus, pull the necessary data from the
+ * workers.
+ *
+ * TODO: Do we really need to pull anything to the coordinator if we're already
+ * pushing down the HAVING clause?
+ *
+ *     inputs: havingQual, extendedOpNodeStats
+ *     outputs: newTargetEntryList, targetProjectionNumber, groupClauseList,
+ *              nextSortGroupRefIndex
+ */
+static void
+ProcessHavingClause(Node *havingQual, ExtendedOpNodeStats *extendedOpNodeStats,
+					List **newTargetEntryList, AttrNumber *targetProjectionNumber,
+					List **groupClauseList, Index *nextSortGroupRefIndex)
+{
+	List *newExpressionList = NIL;
+	TargetEntry *targetEntry = NULL;
+	WorkerAggregateWalkerContext *workerAggContext = NULL;
+
+	if (havingQual == NULL)
+	{
+		return;
+	}
+
+	workerAggContext = palloc0(sizeof(WorkerAggregateWalkerContext));
+	workerAggContext->expressionList = NIL;
+	workerAggContext->pullDistinctColumns = extendedOpNodeStats->pullDistinctColumns;
+	workerAggContext->createGroupByClause = false;
+
+	WorkerAggregateWalker(havingQual, workerAggContext);
+	newExpressionList = workerAggContext->expressionList;
+
+	ProcessWorkerExpressionList(newExpressionList, targetEntry,
+								workerAggContext->createGroupByClause,
+								newTargetEntryList, targetProjectionNumber,
+								groupClauseList, nextSortGroupRefIndex);
 }
 
 
