@@ -191,7 +191,8 @@ static bool TablePartitioningSupportsDistinct(List *tableNodeList,
 static Node * WorkerLimitCount(Node *limitCount, Node *limitOffset,
 							   List *groupClauseList, List *sortClauseList,
 							   List *targetList, bool groupedByDisjointPartitionColumn);
-static List * WorkerSortClauseList(MultiExtendedOp *originalOpNode,
+static List * WorkerSortClauseList(Node *limitCount, bool hasDistinctOn, List *targetList,
+								   List *groupClauseList, List *sortClauseList,
 								   bool groupedByDisjointPartitionColumn);
 static List * GenerateNewTargetEntriesForSortClauses(List *originalTargetList,
 													 List *sortClauseList,
@@ -1903,7 +1904,11 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 							 groupedByDisjointPartitionColumn);
 
 		workerExtendedOpNode->sortClauseList =
-			WorkerSortClauseList(originalOpNode, groupedByDisjointPartitionColumn);
+			WorkerSortClauseList(originalOpNode->limitCount,
+								 originalOpNode->hasDistinctOn, targetEntryList,
+								 originalOpNode->groupClauseList,
+								 originalOpNode->sortClauseList,
+								 groupedByDisjointPartitionColumn);
 
 		newTargetEntryListForSortClauses =
 			GenerateNewTargetEntriesForSortClauses(originalOpNode->targetList,
@@ -3600,26 +3605,26 @@ WorkerLimitCount(Node *limitCount, Node *limitOffset, List *groupClauseList,
 
 
 /*
- * WorkerSortClauseList first checks if the given extended node contains a limit
+ * WorkerSortClauseList first checks if the given input contains a limit
  * or hasDistinctOn that can be pushed down. If it does, the function then
  * checks if we need to add any sorting and grouping clauses to the sort list we
  * push down for the limit. If we do, the function adds these clauses and
  * returns them. Otherwise, the function returns null.
  */
 static List *
-WorkerSortClauseList(MultiExtendedOp *originalOpNode,
+WorkerSortClauseList(Node *limitCount, bool hasDistinctOn, List *targetList,
+					 List *groupClauseList, List *sortClauseList,
 					 bool groupedByDisjointPartitionColumn)
 {
 	List *workerSortClauseList = NIL;
-	List *groupClauseList = originalOpNode->groupClauseList;
-	List *sortClauseList = copyObject(originalOpNode->sortClauseList);
-	List *targetList = originalOpNode->targetList;
 
 	/* if no limit node and no hasDistinctOn, no need to push down sort clauses */
-	if (originalOpNode->limitCount == NULL && !originalOpNode->hasDistinctOn)
+	if (limitCount == NULL && !hasDistinctOn)
 	{
 		return NIL;
 	}
+
+	sortClauseList = copyObject(sortClauseList);
 
 	/*
 	 * If we are pushing down the limit, push down any order by clauses. Also if
