@@ -74,6 +74,20 @@ typedef struct WorkerAggregateWalkerContext
 	bool pullDistinctColumns;
 } WorkerAggregateWalkerContext;
 
+/*
+ * LimitOrderByStats a structure that is used commonly while
+ * processing sort and limit clauses.
+ */
+typedef struct LimitOrderByStats
+{
+	bool groupedByDisjointPartitionColumn;
+	bool groupClauseIsEmpty;
+	bool sortClauseIsEmpty;
+	bool hasOrderByAggregate;
+	bool canApproximate;
+	bool hasDistinctOn;
+} LimitOrderByStats;
+
 
 /* Local functions forward declarations */
 static MultiSelect * AndSelectNode(MultiSelect *selectNode);
@@ -143,6 +157,19 @@ static void PrcoessDistinctClause(List *distinctClause, bool hasDistinctOn,
 								  List *groupClauseList, bool queryHasAggregates,
 								  List **workerDistinctClause, bool *workerHasDistinctOn,
 								  bool *distinctPreventsLimitPushdown);
+static void ProcessLimitOrderByClauses(LimitOrderByStats sortLimitClauseStats,
+									   Node *originalLimitCount, Node *limitOffset,
+									   List *sortClauseList, List *groupClauseList,
+									   List *originalTargetList, Node **workerLimitCount,
+									   List **workerSortClauseList,
+									   List **newTargetEntryList,
+									   AttrNumber *targetProjectionNumber,
+									   Index *nextSortGroupRefIndex);
+static LimitOrderByStats BuildLimitOrderByStats(bool hasDistinctOn, bool
+												groupedByDisjointPartitionColumn,
+												List *groupClause,
+												List *sortClauseList,
+												List *targetList);
 static void ProcessWorkerExpressionList(List *expressionList,
 										TargetEntry *originalTargetEntry,
 										bool addToGroupByClause,
@@ -188,12 +215,11 @@ static bool TablePartitioningSupportsDistinct(List *tableNodeList,
 											  Var *distinctColumn);
 
 /* Local functions forward declarations for limit clauses */
-static Node * WorkerLimitCount(Node *limitCount, Node *limitOffset,
-							   List *groupClauseList, List *sortClauseList,
-							   List *targetList, bool groupedByDisjointPartitionColumn);
-static List * WorkerSortClauseList(Node *limitCount, bool hasDistinctOn, List *targetList,
+static Node * WorkerLimitCount(Node *limitCount, Node *limitOffset, LimitOrderByStats
+							   limitOrderByStats);
+static List * WorkerSortClauseList(Node *limitCount,
 								   List *groupClauseList, List *sortClauseList,
-								   bool groupedByDisjointPartitionColumn);
+								   LimitOrderByStats limitOrderByStats);
 static List * GenerateNewTargetEntriesForSortClauses(List *originalTargetList,
 													 List *sortClauseList,
 													 AttrNumber *targetProjectionNumber,
@@ -1848,76 +1874,80 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 					 ExtendedOpNodeStats *extendedOpNodeStats)
 {
 	MultiExtendedOp *workerExtendedOpNode = NULL;
-	List *targetEntryList = originalOpNode->targetList;
 	List *newTargetEntryList = NIL;
-	List *groupClauseList = copyObject(originalOpNode->groupClauseList);
-	Node *havingQual = originalOpNode->havingQual;
+	List *newGroupClauseList = copyObject(originalOpNode->groupClauseList);
 	AttrNumber targetProjectionNumber = 1;
 	Index nextSortGroupRefIndex = 0;
-	bool queryHasAggregates = TargetListHasAggragates(targetEntryList);
 	bool distinctPreventsLimitPushdown = false;
 	bool groupByExtended = false;
 	bool groupedByDisjointPartitionColumn =
 		extendedOpNodeStats->groupedByDisjointPartitionColumn;
 	bool pushDownWindowFunction = extendedOpNodeStats->pushDownWindowFunctions;
-	int originalGroupClauseLength = list_length(originalOpNode->groupClauseList);
+
+	List *originalTargetEntryList = originalOpNode->targetList;
+	List *originalGroupClauseList = originalOpNode->groupClauseList;
+	List *originalSortClauseList = originalOpNode->sortClauseList;
+	Node *originalHavingQual = originalOpNode->havingQual;
+	Node *originalLimitCount = originalOpNode->limitCount;
+	Node *originalLimitOffset = originalOpNode->limitOffset;
+	List *originalWindowClause = originalOpNode->windowClause;
+	List *originalDistinctClause = originalOpNode->distinctClause;
+	bool hasWindowFuncs = originalOpNode->hasWindowFuncs;
+	bool hasDistinctOn = originalOpNode->hasDistinctOn;
+
+	int originalGroupClauseLength = list_length(originalGroupClauseList);
+	bool queryHasAggregates = TargetListHasAggragates(originalTargetEntryList);
 
 	/* calculate the next sort group index based on the original target list */
-	nextSortGroupRefIndex = GetNextSortGroupRef(targetEntryList);
+	nextSortGroupRefIndex = GetNextSortGroupRef(originalTargetEntryList);
 
-	ProcessWorkerTargetList(targetEntryList, extendedOpNodeStats, &newTargetEntryList,
-							&targetProjectionNumber, &groupClauseList,
-							&nextSortGroupRefIndex);
+	ProcessWorkerTargetList(originalTargetEntryList, extendedOpNodeStats,
+							&newTargetEntryList, &targetProjectionNumber,
+							&newGroupClauseList, &nextSortGroupRefIndex);
 
-	ProcessHavingClause(havingQual, extendedOpNodeStats, &newTargetEntryList,
-						&targetProjectionNumber, &groupClauseList,
+	ProcessHavingClause(originalHavingQual, extendedOpNodeStats, &newTargetEntryList,
+						&targetProjectionNumber, &newGroupClauseList,
 						&nextSortGroupRefIndex);
 
 	workerExtendedOpNode = CitusMakeNode(MultiExtendedOp);
 	workerExtendedOpNode->distinctClause = NIL;
 	workerExtendedOpNode->hasDistinctOn = false;
-	workerExtendedOpNode->hasWindowFuncs = originalOpNode->hasWindowFuncs;
-	workerExtendedOpNode->windowClause = originalOpNode->windowClause;
-	workerExtendedOpNode->groupClauseList = groupClauseList;
+	workerExtendedOpNode->hasWindowFuncs = hasWindowFuncs;
+	workerExtendedOpNode->windowClause = originalWindowClause;
+	workerExtendedOpNode->groupClauseList = newGroupClauseList;
 
-	PrcoessDistinctClause(originalOpNode->distinctClause, originalOpNode->hasDistinctOn,
-						  groupClauseList, queryHasAggregates,
-						  &workerExtendedOpNode->distinctClause,
+	PrcoessDistinctClause(originalDistinctClause, hasDistinctOn, newGroupClauseList,
+						  queryHasAggregates, &workerExtendedOpNode->distinctClause,
 						  &workerExtendedOpNode->hasDistinctOn,
 						  &distinctPreventsLimitPushdown);
 
 	/*
-	 * Order by and limit clauses are pushed down only if
-	 * (1) We do not create a new group by clause during aggregate mutation, and
-	 * (2) There distinct clause does not prevent limit pushdown
+	 * Order by and limit clauses are relevant to each other, and processing
+	 * them together makes it handy for us.
+	 *
+	 * The other parts of the query might have already prohibited pushing down
+	 * LIMIT and ORDER BY clauses as described below:
+	 *      (1) Creating a new group by clause during aggregate mutation, or
+	 *      (2) Distinct clause is not pushed down
 	 */
-	groupByExtended = list_length(groupClauseList) > originalGroupClauseLength;
+	groupByExtended = list_length(newGroupClauseList) > originalGroupClauseLength;
 	if (!groupByExtended && !distinctPreventsLimitPushdown)
 	{
-		List *newTargetEntryListForSortClauses = NIL;
+		/* both sort and limit clauses rely on similar information */
+		LimitOrderByStats limitOrderByStats =
+			BuildLimitOrderByStats(originalOpNode->hasDistinctOn,
+								   groupedByDisjointPartitionColumn,
+								   originalOpNode->groupClauseList,
+								   originalOpNode->sortClauseList,
+								   originalTargetEntryList);
 
-		/* if we can push down the limit, also set related fields */
-		workerExtendedOpNode->limitCount =
-			WorkerLimitCount(originalOpNode->limitCount, originalOpNode->limitOffset,
-							 originalOpNode->groupClauseList,
-							 originalOpNode->sortClauseList, targetEntryList,
-							 groupedByDisjointPartitionColumn);
-
-		workerExtendedOpNode->sortClauseList =
-			WorkerSortClauseList(originalOpNode->limitCount,
-								 originalOpNode->hasDistinctOn, targetEntryList,
-								 originalOpNode->groupClauseList,
-								 originalOpNode->sortClauseList,
-								 groupedByDisjointPartitionColumn);
-
-		newTargetEntryListForSortClauses =
-			GenerateNewTargetEntriesForSortClauses(originalOpNode->targetList,
-												   workerExtendedOpNode->sortClauseList,
-												   &targetProjectionNumber,
-												   &nextSortGroupRefIndex);
-
-		newTargetEntryList = list_concat(newTargetEntryList,
-										 newTargetEntryListForSortClauses);
+		ProcessLimitOrderByClauses(limitOrderByStats, originalLimitCount,
+								   originalLimitOffset, originalSortClauseList,
+								   originalGroupClauseList, originalTargetEntryList,
+								   &workerExtendedOpNode->limitCount,
+								   &workerExtendedOpNode->sortClauseList,
+								   &newTargetEntryList, &targetProjectionNumber,
+								   &nextSortGroupRefIndex);
 	}
 
 	if (workerExtendedOpNode->windowClause)
@@ -1960,7 +1990,7 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 	 * if there is a group by, it contains distribution column).
 	 *
 	 */
-	if (havingQual != NULL &&
+	if (originalHavingQual != NULL &&
 		(groupedByDisjointPartitionColumn || pushDownWindowFunction))
 	{
 		workerExtendedOpNode->havingQual = originalOpNode->havingQual;
@@ -2129,6 +2159,72 @@ PrcoessDistinctClause(List *distinctClause, bool hasDistinctOn, List *groupClaus
 		*workerDistinctClause = distinctClause;
 		*workerHasDistinctOn = hasDistinctOn;
 	}
+}
+
+
+/*
+ * ProcessLimitOrderByClauses gets the inputs and modifies the outputs in a way
+ * that worker query's LIMIT and ORDER BY clauses are set accordingly. Adding
+ * entries to ORDER BY might trigger adding new entries to newTargetEntryList.
+ * See GenerateNewTargetEntriesForSortClauses() for the details.
+ *
+ *     inputs: sortLimitClauseStats, originalLimitCount, limitOffset,
+ *             sortClauseList, groupClauseList, originalTargetList
+ *     outputs: workerLimitCount, workerSortClauseList, newTargetEntryList,
+ *              targetProjectionNumber, nextSortGroupRefIndex
+ */
+static void
+ProcessLimitOrderByClauses(LimitOrderByStats sortLimitClauseStats,
+						   Node *originalLimitCount, Node *limitOffset,
+						   List *sortClauseList, List *groupClauseList,
+						   List *originalTargetList, Node **workerLimitCount,
+						   List **workerSortClauseList, List **newTargetEntryList,
+						   AttrNumber *targetProjectionNumber,
+						   Index *nextSortGroupRefIndex)
+{
+	List *newTargetEntryListForSortClauses = NIL;
+
+	*workerLimitCount =
+		WorkerLimitCount(originalLimitCount, limitOffset, sortLimitClauseStats);
+
+	*workerSortClauseList =
+		WorkerSortClauseList(originalLimitCount,
+							 groupClauseList,
+							 sortClauseList,
+							 sortLimitClauseStats);
+
+	newTargetEntryListForSortClauses =
+		GenerateNewTargetEntriesForSortClauses(originalTargetList,
+											   *workerSortClauseList,
+											   targetProjectionNumber,
+											   nextSortGroupRefIndex);
+
+	*newTargetEntryList = list_concat(*newTargetEntryList,
+									  newTargetEntryListForSortClauses);
+}
+
+
+/*
+ * BuildLimitOrderByStats is a helper function that simply builds
+ * the necessary information for processing the limit and order by.
+ * The return value should be used in a read-only manner.
+ */
+static LimitOrderByStats
+BuildLimitOrderByStats(bool hasDistinctOn, bool groupedByDisjointPartitionColumn,
+					   List *groupClause, List *sortClauseList, List *targetList)
+{
+	LimitOrderByStats limitOrderByStats;
+
+	limitOrderByStats.groupedByDisjointPartitionColumn = groupedByDisjointPartitionColumn;
+	limitOrderByStats.hasDistinctOn = hasDistinctOn;
+	limitOrderByStats.groupClauseIsEmpty = (groupClause == NIL);
+	limitOrderByStats.sortClauseIsEmpty = (sortClauseList == NIL);
+	limitOrderByStats.canApproximate = CanPushDownLimitApproximate(sortClauseList,
+																   targetList);
+	limitOrderByStats.hasOrderByAggregate = HasOrderByAggregate(sortClauseList,
+																targetList);
+
+	return limitOrderByStats;
 }
 
 
@@ -3514,13 +3610,9 @@ ExtractQueryWalker(Node *node, List **queryList)
  * returns null.
  */
 static Node *
-WorkerLimitCount(Node *limitCount, Node *limitOffset, List *groupClauseList,
-				 List *sortClauseList, List *targetList,
-				 bool groupedByDisjointPartitionColumn)
+WorkerLimitCount(Node *limitCount, Node *limitOffset, LimitOrderByStats limitOrderByStats)
 {
 	Node *workerLimitNode = NULL;
-
-	bool hasOrderByAggregate = HasOrderByAggregate(sortClauseList, targetList);
 	bool canPushDownLimit = false;
 	bool canApproximate = false;
 
@@ -3544,21 +3636,22 @@ WorkerLimitCount(Node *limitCount, Node *limitOffset, List *groupClauseList,
 	 * original limit. Else if we have order by clauses with commutative aggregates,
 	 * we can push down approximate limits.
 	 */
-	if (groupClauseList == NIL || groupedByDisjointPartitionColumn)
+	if (limitOrderByStats.groupClauseIsEmpty ||
+		limitOrderByStats.groupedByDisjointPartitionColumn)
 	{
 		canPushDownLimit = true;
 	}
-	else if (sortClauseList == NIL)
+	else if (limitOrderByStats.sortClauseIsEmpty)
 	{
 		canPushDownLimit = false;
 	}
-	else if (!hasOrderByAggregate)
+	else if (!limitOrderByStats.hasOrderByAggregate)
 	{
 		canPushDownLimit = true;
 	}
 	else
 	{
-		canApproximate = CanPushDownLimitApproximate(sortClauseList, targetList);
+		canApproximate = limitOrderByStats.canApproximate;
 	}
 
 	/* create the workerLimitNode according to the decisions above */
@@ -3612,14 +3705,13 @@ WorkerLimitCount(Node *limitCount, Node *limitOffset, List *groupClauseList,
  * returns them. Otherwise, the function returns null.
  */
 static List *
-WorkerSortClauseList(Node *limitCount, bool hasDistinctOn, List *targetList,
-					 List *groupClauseList, List *sortClauseList,
-					 bool groupedByDisjointPartitionColumn)
+WorkerSortClauseList(Node *limitCount, List *groupClauseList, List *sortClauseList,
+					 LimitOrderByStats limitOrderByStats)
 {
 	List *workerSortClauseList = NIL;
 
 	/* if no limit node and no hasDistinctOn, no need to push down sort clauses */
-	if (limitCount == NULL && !hasDistinctOn)
+	if (limitCount == NULL && !limitOrderByStats.hasDistinctOn)
 	{
 		return NIL;
 	}
@@ -3634,14 +3726,15 @@ WorkerSortClauseList(Node *limitCount, bool hasDistinctOn, List *targetList,
 	 * in different task results. By ordering on the group by clause, we ensure
 	 * that query results are consistent.
 	 */
-	if (groupClauseList == NIL || groupedByDisjointPartitionColumn)
+	if (limitOrderByStats.groupClauseIsEmpty ||
+		limitOrderByStats.groupedByDisjointPartitionColumn)
 	{
 		workerSortClauseList = sortClauseList;
 	}
 	else if (sortClauseList != NIL)
 	{
-		bool orderByNonAggregates = !(HasOrderByAggregate(sortClauseList, targetList));
-		bool canApproximate = CanPushDownLimitApproximate(sortClauseList, targetList);
+		bool orderByNonAggregates = !limitOrderByStats.hasOrderByAggregate;
+		bool canApproximate = limitOrderByStats.canApproximate;
 
 		if (orderByNonAggregates)
 		{
