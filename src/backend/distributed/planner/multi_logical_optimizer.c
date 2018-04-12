@@ -170,6 +170,12 @@ static LimitOrderByStats BuildLimitOrderByStats(bool hasDistinctOn, bool
 												List *groupClause,
 												List *sortClauseList,
 												List *targetList);
+static void ProcessWorkerWindowFunctions(List *windowClauseList,
+										 List *originalTargetEntryList,
+										 List **workerWindowClauseList,
+										 List **newTargetEntryList,
+										 AttrNumber *targetProjectionNumber,
+										 Index *nextSortGroupRefIndex);
 static void ProcessWorkerExpressionList(List *expressionList,
 										TargetEntry *originalTargetEntry,
 										bool addToGroupByClause,
@@ -1913,7 +1919,6 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 	workerExtendedOpNode->distinctClause = NIL;
 	workerExtendedOpNode->hasDistinctOn = false;
 	workerExtendedOpNode->hasWindowFuncs = hasWindowFuncs;
-	workerExtendedOpNode->windowClause = originalWindowClause;
 	workerExtendedOpNode->groupClauseList = newGroupClauseList;
 
 	PrcoessDistinctClause(originalDistinctClause, hasDistinctOn, newGroupClauseList,
@@ -1950,32 +1955,9 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 								   &nextSortGroupRefIndex);
 	}
 
-	if (workerExtendedOpNode->windowClause)
-	{
-		List *windowClauseList = workerExtendedOpNode->windowClause;
-		ListCell *windowClauseCell = NULL;
-
-		foreach(windowClauseCell, windowClauseList)
-		{
-			WindowClause *windowClause = (WindowClause *) lfirst(windowClauseCell);
-
-			List *partitionClauseTargetList =
-				GenerateNewTargetEntriesForSortClauses(originalOpNode->targetList,
-													   windowClause->partitionClause,
-													   &targetProjectionNumber,
-													   &nextSortGroupRefIndex);
-			List *orderClauseTargetList =
-				GenerateNewTargetEntriesForSortClauses(originalOpNode->targetList,
-													   windowClause->orderClause,
-													   &targetProjectionNumber,
-													   &nextSortGroupRefIndex);
-
-			newTargetEntryList = list_concat(newTargetEntryList,
-											 partitionClauseTargetList);
-			newTargetEntryList = list_concat(newTargetEntryList,
-											 orderClauseTargetList);
-		}
-	}
+	ProcessWorkerWindowFunctions(originalWindowClause, originalTargetEntryList,
+								 &workerExtendedOpNode->windowClause, &newTargetEntryList,
+								 &targetProjectionNumber, &nextSortGroupRefIndex);
 
 	workerExtendedOpNode->targetList = newTargetEntryList;
 
@@ -2225,6 +2207,52 @@ BuildLimitOrderByStats(bool hasDistinctOn, bool groupedByDisjointPartitionColumn
 																targetList);
 
 	return limitOrderByStats;
+}
+
+
+/*
+ * ProcessWorkerWindowFunctions gets the inputs and modifies the outputs in a way
+ * that worker query's workerWindowClauseList is set.
+ *
+ *     inputs: windowClauseList, originalTargetEntryList
+ *     outputs: workerWindowClauseList, newTargetEntryList, targetProjectionNumber, nextSortGroupRefIndex
+ *
+ */
+static void
+ProcessWorkerWindowFunctions(List *windowClauseList, List *originalTargetEntryList,
+							 List **workerWindowClauseList, List **newTargetEntryList,
+							 AttrNumber *targetProjectionNumber,
+							 Index *nextSortGroupRefIndex)
+{
+	ListCell *windowClauseCell = NULL;
+
+	if (windowClauseList == NIL)
+	{
+		return;
+	}
+
+	foreach(windowClauseCell, windowClauseList)
+	{
+		WindowClause *windowClause = (WindowClause *) lfirst(windowClauseCell);
+
+		List *partitionClauseTargetList =
+			GenerateNewTargetEntriesForSortClauses(originalTargetEntryList,
+												   windowClause->partitionClause,
+												   targetProjectionNumber,
+												   nextSortGroupRefIndex);
+		List *orderClauseTargetList =
+			GenerateNewTargetEntriesForSortClauses(originalTargetEntryList,
+												   windowClause->orderClause,
+												   targetProjectionNumber,
+												   nextSortGroupRefIndex);
+
+		*newTargetEntryList = list_concat(*newTargetEntryList,
+										  partitionClauseTargetList);
+		*newTargetEntryList = list_concat(*newTargetEntryList,
+										  orderClauseTargetList);
+	}
+
+	*workerWindowClauseList = windowClauseList;
 }
 
 
