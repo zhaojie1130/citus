@@ -173,6 +173,7 @@ static LimitOrderByStats BuildLimitOrderByStats(bool hasDistinctOn, bool
 static void ProcessWorkerWindowFunctions(List *windowClauseList,
 										 List *originalTargetEntryList,
 										 List **workerWindowClauseList,
+										 bool *hasWindowFunctions,
 										 List **newTargetEntryList,
 										 AttrNumber *targetProjectionNumber,
 										 Index *nextSortGroupRefIndex);
@@ -1879,9 +1880,7 @@ static MultiExtendedOp *
 WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 					 ExtendedOpNodeStats *extendedOpNodeStats)
 {
-	MultiExtendedOp *workerExtendedOpNode = NULL;
-	List *newTargetEntryList = NIL;
-	List *newGroupClauseList = copyObject(originalOpNode->groupClauseList);
+	MultiExtendedOp *workerExtendedOpNode = CitusMakeNode(MultiExtendedOp);
 	AttrNumber targetProjectionNumber = 1;
 	Index nextSortGroupRefIndex = 0;
 	bool distinctPreventsLimitPushdown = false;
@@ -1898,7 +1897,6 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 	Node *originalLimitOffset = originalOpNode->limitOffset;
 	List *originalWindowClause = originalOpNode->windowClause;
 	List *originalDistinctClause = originalOpNode->distinctClause;
-	bool hasWindowFuncs = originalOpNode->hasWindowFuncs;
 	bool hasDistinctOn = originalOpNode->hasDistinctOn;
 
 	int originalGroupClauseLength = list_length(originalGroupClauseList);
@@ -1907,21 +1905,20 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 	/* calculate the next sort group index based on the original target list */
 	nextSortGroupRefIndex = GetNextSortGroupRef(originalTargetEntryList);
 
-	ProcessWorkerTargetList(originalTargetEntryList, extendedOpNodeStats,
-							&newTargetEntryList, &targetProjectionNumber,
-							&newGroupClauseList, &nextSortGroupRefIndex);
+	workerExtendedOpNode->groupClauseList = copyObject(originalGroupClauseList);
 
-	ProcessHavingClause(originalHavingQual, extendedOpNodeStats, &newTargetEntryList,
-						&targetProjectionNumber, &newGroupClauseList,
+	ProcessWorkerTargetList(originalTargetEntryList, extendedOpNodeStats,
+							&workerExtendedOpNode->targetList, &targetProjectionNumber,
+							&workerExtendedOpNode->groupClauseList,
+							&nextSortGroupRefIndex);
+
+	ProcessHavingClause(originalHavingQual, extendedOpNodeStats,
+						&workerExtendedOpNode->targetList,
+						&targetProjectionNumber, &workerExtendedOpNode->groupClauseList,
 						&nextSortGroupRefIndex);
 
-	workerExtendedOpNode = CitusMakeNode(MultiExtendedOp);
-	workerExtendedOpNode->distinctClause = NIL;
-	workerExtendedOpNode->hasDistinctOn = false;
-	workerExtendedOpNode->hasWindowFuncs = hasWindowFuncs;
-	workerExtendedOpNode->groupClauseList = newGroupClauseList;
-
-	PrcoessDistinctClause(originalDistinctClause, hasDistinctOn, newGroupClauseList,
+	PrcoessDistinctClause(originalDistinctClause, hasDistinctOn,
+						  workerExtendedOpNode->groupClauseList,
 						  queryHasAggregates, &workerExtendedOpNode->distinctClause,
 						  &workerExtendedOpNode->hasDistinctOn,
 						  &distinctPreventsLimitPushdown);
@@ -1935,15 +1932,16 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 	 *      (1) Creating a new group by clause during aggregate mutation, or
 	 *      (2) Distinct clause is not pushed down
 	 */
-	groupByExtended = list_length(newGroupClauseList) > originalGroupClauseLength;
+	groupByExtended =
+		list_length(workerExtendedOpNode->groupClauseList) > originalGroupClauseLength;
 	if (!groupByExtended && !distinctPreventsLimitPushdown)
 	{
 		/* both sort and limit clauses rely on similar information */
 		LimitOrderByStats limitOrderByStats =
-			BuildLimitOrderByStats(originalOpNode->hasDistinctOn,
+			BuildLimitOrderByStats(hasDistinctOn,
 								   groupedByDisjointPartitionColumn,
-								   originalOpNode->groupClauseList,
-								   originalOpNode->sortClauseList,
+								   originalGroupClauseList,
+								   originalSortClauseList,
 								   originalTargetEntryList);
 
 		ProcessLimitOrderByClauses(limitOrderByStats, originalLimitCount,
@@ -1951,15 +1949,16 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 								   originalGroupClauseList, originalTargetEntryList,
 								   &workerExtendedOpNode->limitCount,
 								   &workerExtendedOpNode->sortClauseList,
-								   &newTargetEntryList, &targetProjectionNumber,
+								   &workerExtendedOpNode->targetList,
+								   &targetProjectionNumber,
 								   &nextSortGroupRefIndex);
 	}
 
 	ProcessWorkerWindowFunctions(originalWindowClause, originalTargetEntryList,
-								 &workerExtendedOpNode->windowClause, &newTargetEntryList,
+								 &workerExtendedOpNode->windowClause,
+								 &workerExtendedOpNode->hasWindowFuncs,
+								 &workerExtendedOpNode->targetList,
 								 &targetProjectionNumber, &nextSortGroupRefIndex);
-
-	workerExtendedOpNode->targetList = newTargetEntryList;
 
 	/*
 	 * If grouped by a partition column whose values are shards have disjoint sets
@@ -1975,7 +1974,7 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 	if (originalHavingQual != NULL &&
 		(groupedByDisjointPartitionColumn || pushDownWindowFunction))
 	{
-		workerExtendedOpNode->havingQual = originalOpNode->havingQual;
+		workerExtendedOpNode->havingQual = originalHavingQual;
 	}
 
 	return workerExtendedOpNode;
@@ -2220,7 +2219,8 @@ BuildLimitOrderByStats(bool hasDistinctOn, bool groupedByDisjointPartitionColumn
  */
 static void
 ProcessWorkerWindowFunctions(List *windowClauseList, List *originalTargetEntryList,
-							 List **workerWindowClauseList, List **newTargetEntryList,
+							 List **workerWindowClauseList, bool *hasWindowFunctions,
+							 List **newTargetEntryList,
 							 AttrNumber *targetProjectionNumber,
 							 Index *nextSortGroupRefIndex)
 {
@@ -2228,6 +2228,8 @@ ProcessWorkerWindowFunctions(List *windowClauseList, List *originalTargetEntryLi
 
 	if (windowClauseList == NIL)
 	{
+		*hasWindowFunctions = false;
+
 		return;
 	}
 
@@ -2253,6 +2255,7 @@ ProcessWorkerWindowFunctions(List *windowClauseList, List *originalTargetEntryLi
 	}
 
 	*workerWindowClauseList = windowClauseList;
+	*hasWindowFunctions = true;
 }
 
 
