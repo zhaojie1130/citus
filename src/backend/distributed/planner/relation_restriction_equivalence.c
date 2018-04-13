@@ -1179,6 +1179,12 @@ AddRteSubqueryToAttributeEquivalenceClass(AttributeEquivalenceClass
 	TargetEntry *subqueryTargetEntry = NULL;
 	Query *targetSubquery = GetTargetSubquery(root, rangeTableEntry, varToBeAdded);
 
+	/* we might not always get the subquery */
+	if (targetSubquery == NULL)
+	{
+		return;
+	}
+
 	subqueryTargetEntry = get_tle_by_resno(targetSubquery->targetList,
 										   varToBeAdded->varattno);
 
