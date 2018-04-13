@@ -150,6 +150,7 @@ static void ProcessWorkerTargetList(List *targetEntryList,
 									Index *nextSortGroupRefIndex);
 static void ProcessHavingClause(Node *havingQual,
 								ExtendedOpNodeStats *extendedOpNodeStats,
+								Node **workerHavingQual,
 								List **newTargetEntryList,
 								AttrNumber *targetProjectionNumber,
 								List **groupClauseList, Index *nextSortGroupRefIndex);
@@ -1887,7 +1888,6 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 	bool groupByExtended = false;
 	bool groupedByDisjointPartitionColumn =
 		extendedOpNodeStats->groupedByDisjointPartitionColumn;
-	bool pushDownWindowFunction = extendedOpNodeStats->pushDownWindowFunctions;
 
 	List *originalTargetEntryList = originalOpNode->targetList;
 	List *originalGroupClauseList = originalOpNode->groupClauseList;
@@ -1913,6 +1913,7 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 							&nextSortGroupRefIndex);
 
 	ProcessHavingClause(originalHavingQual, extendedOpNodeStats,
+						&workerExtendedOpNode->havingQual,
 						&workerExtendedOpNode->targetList,
 						&targetProjectionNumber, &workerExtendedOpNode->groupClauseList,
 						&nextSortGroupRefIndex);
@@ -1959,23 +1960,6 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 								 &workerExtendedOpNode->hasWindowFuncs,
 								 &workerExtendedOpNode->targetList,
 								 &targetProjectionNumber, &nextSortGroupRefIndex);
-
-	/*
-	 * If grouped by a partition column whose values are shards have disjoint sets
-	 * of partition values, we can push down the having qualifier.
-	 *
-	 * When a query with subquery is provided, we can't determine if
-	 * groupedByDisjointPartitionColumn, therefore we also check if there is a
-	 * window function too. If there is a window function we would know that it
-	 * is safe to push down (i.e. it is partitioned on distribution column, and
-	 * if there is a group by, it contains distribution column).
-	 *
-	 */
-	if (originalHavingQual != NULL &&
-		(groupedByDisjointPartitionColumn || pushDownWindowFunction))
-	{
-		workerExtendedOpNode->havingQual = originalHavingQual;
-	}
 
 	return workerExtendedOpNode;
 }
@@ -2049,20 +2033,21 @@ ProcessWorkerTargetList(List *targetEntryList, ExtendedOpNodeStats *extendedOpNo
  * TODO: Do we really need to pull anything to the coordinator if we're already
  * pushing down the HAVING clause?
  *
- *     inputs: havingQual, extendedOpNodeStats
- *     outputs: newTargetEntryList, targetProjectionNumber, groupClauseList,
- *              nextSortGroupRefIndex
+ *     inputs: originalHavingQual, extendedOpNodeStats
+ *     outputs: workerHavingQual, newTargetEntryList, targetProjectionNumber,
+ *              groupClauseList, nextSortGroupRefIndex
  */
 static void
-ProcessHavingClause(Node *havingQual, ExtendedOpNodeStats *extendedOpNodeStats,
-					List **newTargetEntryList, AttrNumber *targetProjectionNumber,
-					List **groupClauseList, Index *nextSortGroupRefIndex)
+ProcessHavingClause(Node *originalHavingQual, ExtendedOpNodeStats *extendedOpNodeStats,
+					Node **workerHavingQual, List **newTargetEntryList,
+					AttrNumber *targetProjectionNumber, List **groupClauseList,
+					Index *nextSortGroupRefIndex)
 {
 	List *newExpressionList = NIL;
 	TargetEntry *targetEntry = NULL;
 	WorkerAggregateWalkerContext *workerAggContext = NULL;
 
-	if (havingQual == NULL)
+	if (originalHavingQual == NULL)
 	{
 		return;
 	}
@@ -2072,13 +2057,30 @@ ProcessHavingClause(Node *havingQual, ExtendedOpNodeStats *extendedOpNodeStats,
 	workerAggContext->pullDistinctColumns = extendedOpNodeStats->pullDistinctColumns;
 	workerAggContext->createGroupByClause = false;
 
-	WorkerAggregateWalker(havingQual, workerAggContext);
+	WorkerAggregateWalker(originalHavingQual, workerAggContext);
 	newExpressionList = workerAggContext->expressionList;
 
 	ProcessWorkerExpressionList(newExpressionList, targetEntry,
 								workerAggContext->createGroupByClause,
 								newTargetEntryList, targetProjectionNumber,
 								groupClauseList, nextSortGroupRefIndex);
+
+	/*
+	 * If grouped by a partition column whose values are shards have disjoint sets
+	 * of partition values, we can push down the having qualifier.
+	 *
+	 * When a query with subquery is provided, we can't determine if
+	 * groupedByDisjointPartitionColumn, therefore we also check if there is a
+	 * window function too. If there is a window function we would know that it
+	 * is safe to push down (i.e. it is partitioned on distribution column, and
+	 * if there is a group by, it contains distribution column).
+	 *
+	 */
+	if (extendedOpNodeStats->groupedByDisjointPartitionColumn ||
+		extendedOpNodeStats->pushDownWindowFunctions)
+	{
+		*workerHavingQual = originalHavingQual;
+	}
 }
 
 
