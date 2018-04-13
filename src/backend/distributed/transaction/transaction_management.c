@@ -183,6 +183,8 @@ CoordinatedTransactionCallback(XactEvent event, void *arg)
 
 		case XACT_EVENT_ABORT:
 		{
+			MemoryContext savedContext = CurrentMemoryContext;
+
 			/*
 			 * FIXME: Add warning for the COORD_TRANS_COMMITTED case. That
 			 * can be reached if this backend fails after the
@@ -194,7 +196,38 @@ CoordinatedTransactionCallback(XactEvent event, void *arg)
 			 * transaction management. Do so before doing other work, so the
 			 * callbacks still can perform work if needed.
 			 */
-			RemoveIntermediateResultsDirectory();
+
+			/*
+			 * If we throw an ERROR during ABORT then this handler will be called again.
+			 * It's unlikely that the second try will succeed, so we attempt to continue
+			 * instead of raising the ERROR (which leads to crash when the second try
+			 * throws an ERROR which causes us to try a third time which throws an ERROR
+			 * etc)
+			 */
+			PG_TRY();
+			{
+				RemoveIntermediateResultsDirectory();
+			}
+			PG_CATCH();
+			{
+				ErrorData *edata = CopyErrorData();
+
+				/* don't try to intercept PANIC or FATAL, let those breeze past us */
+				if (edata->elevel != ERROR)
+				{
+					PG_RE_THROW();
+				}
+
+				/* turn the ERROR into a WARNING and emit it */
+				edata->elevel = WARNING;
+				ThrowErrorData(edata);
+
+				/* leave the error handling system */
+				FlushErrorState();
+				MemoryContextSwitchTo(savedContext);
+			}
+			PG_END_TRY();
+
 			ResetShardPlacementTransactionState();
 
 			/* handles both already prepared and open transactions */
