@@ -1924,6 +1924,12 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 						  &workerExtendedOpNode->hasDistinctOn,
 						  &distinctPreventsLimitPushdown);
 
+	ProcessWorkerWindowFunctions(originalWindowClause, originalTargetEntryList,
+								 &workerExtendedOpNode->windowClause,
+								 &workerExtendedOpNode->hasWindowFuncs,
+								 &workerExtendedOpNode->targetList,
+								 &targetProjectionNumber, &nextSortGroupRefIndex);
+
 	/*
 	 * Order by and limit clauses are relevant to each other, and processing
 	 * them together makes it handy for us.
@@ -1954,12 +1960,6 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 								   &targetProjectionNumber,
 								   &nextSortGroupRefIndex);
 	}
-
-	ProcessWorkerWindowFunctions(originalWindowClause, originalTargetEntryList,
-								 &workerExtendedOpNode->windowClause,
-								 &workerExtendedOpNode->hasWindowFuncs,
-								 &workerExtendedOpNode->targetList,
-								 &targetProjectionNumber, &nextSortGroupRefIndex);
 
 	return workerExtendedOpNode;
 }
