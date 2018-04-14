@@ -142,42 +142,46 @@ static Expr * AddTypeConversion(Node *originalAggregate, Node *newExpression);
 static MultiExtendedOp * WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 											  ExtendedOpNodeStats *extendedOpNodeStats);
 static bool TargetListHasAggragates(List *targetEntryList);
-static void ProcessWorkerTargetList(List *targetEntryList,
-									ExtendedOpNodeStats *extendedOpNodeStats,
-									List **newTargetEntryList,
-									AttrNumber *targetProjectionNumber,
-									List **groupClauseList,
-									Index *nextSortGroupRefIndex);
-static void ProcessHavingClause(Node *havingQual,
-								ExtendedOpNodeStats *extendedOpNodeStats,
-								Node **workerHavingQual,
-								List **newTargetEntryList,
-								AttrNumber *targetProjectionNumber,
-								List **groupClauseList, Index *nextSortGroupRefIndex);
-static void PrcoessDistinctClause(List *distinctClause, bool hasDistinctOn,
-								  List *groupClauseList, bool queryHasAggregates,
-								  List **workerDistinctClause, bool *workerHasDistinctOn,
-								  bool *distinctPreventsLimitPushdown);
-static void ProcessLimitOrderByClauses(LimitOrderByStats sortLimitClauseStats,
-									   Node *originalLimitCount, Node *limitOffset,
-									   List *sortClauseList, List *groupClauseList,
-									   List *originalTargetList, Node **workerLimitCount,
-									   List **workerSortClauseList,
-									   List **newTargetEntryList,
-									   AttrNumber *targetProjectionNumber,
-									   Index *nextSortGroupRefIndex);
+static void ProcessTargetListForWorkerQuery(List *targetEntryList,
+											ExtendedOpNodeStats *extendedOpNodeStats,
+											List **newTargetEntryList,
+											AttrNumber *targetProjectionNumber,
+											List **groupClauseList,
+											Index *nextSortGroupRefIndex);
+static void ProcessHavingClauseForWorkerQuery(Node *havingQual,
+											  ExtendedOpNodeStats *extendedOpNodeStats,
+											  Node **workerHavingQual,
+											  List **newTargetEntryList,
+											  AttrNumber *targetProjectionNumber,
+											  List **groupClauseList,
+											  Index *nextSortGroupRefIndex);
+static void PrcoessDistinctClauseForWorkerQuery(List *distinctClause, bool hasDistinctOn,
+												List *groupClauseList, bool
+												queryHasAggregates,
+												List **workerDistinctClause,
+												bool *workerHasDistinctOn,
+												bool *distinctPreventsLimitPushdown);
+static void ProcessLimitOrderByForWorkerQuery(LimitOrderByStats sortLimitClauseStats,
+											  Node *originalLimitCount, Node *limitOffset,
+											  List *sortClauseList, List *groupClauseList,
+											  List *originalTargetList,
+											  Node **workerLimitCount,
+											  List **workerSortClauseList,
+											  List **newTargetEntryList,
+											  AttrNumber *targetProjectionNumber,
+											  Index *nextSortGroupRefIndex);
 static LimitOrderByStats BuildLimitOrderByStats(bool hasDistinctOn, bool
 												groupedByDisjointPartitionColumn,
 												List *groupClause,
 												List *sortClauseList,
 												List *targetList);
-static void ProcessWorkerWindowFunctions(List *windowClauseList,
-										 List *originalTargetEntryList,
-										 List **workerWindowClauseList,
-										 bool *hasWindowFunctions,
-										 List **newTargetEntryList,
-										 AttrNumber *targetProjectionNumber,
-										 Index *nextSortGroupRefIndex);
+static void ProcessWindowFunctionsForWorkerQuery(List *windowClauseList,
+												 List *originalTargetEntryList,
+												 List **workerWindowClauseList,
+												 bool *hasWindowFunctions,
+												 List **newTargetEntryList,
+												 AttrNumber *targetProjectionNumber,
+												 Index *nextSortGroupRefIndex);
 static void ProcessWorkerExpressionList(List *expressionList,
 										TargetEntry *originalTargetEntry,
 										bool addToGroupByClause,
@@ -1907,28 +1911,31 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 
 	workerExtendedOpNode->groupClauseList = copyObject(originalGroupClauseList);
 
-	ProcessWorkerTargetList(originalTargetEntryList, extendedOpNodeStats,
-							&workerExtendedOpNode->targetList, &targetProjectionNumber,
-							&workerExtendedOpNode->groupClauseList,
-							&nextSortGroupRefIndex);
+	ProcessTargetListForWorkerQuery(originalTargetEntryList, extendedOpNodeStats,
+									&workerExtendedOpNode->targetList,
+									&targetProjectionNumber,
+									&workerExtendedOpNode->groupClauseList,
+									&nextSortGroupRefIndex);
 
-	ProcessHavingClause(originalHavingQual, extendedOpNodeStats,
-						&workerExtendedOpNode->havingQual,
-						&workerExtendedOpNode->targetList,
-						&targetProjectionNumber, &workerExtendedOpNode->groupClauseList,
-						&nextSortGroupRefIndex);
+	ProcessHavingClauseForWorkerQuery(originalHavingQual, extendedOpNodeStats,
+									  &workerExtendedOpNode->havingQual,
+									  &workerExtendedOpNode->targetList,
+									  &targetProjectionNumber,
+									  &workerExtendedOpNode->groupClauseList,
+									  &nextSortGroupRefIndex);
 
-	PrcoessDistinctClause(originalDistinctClause, hasDistinctOn,
-						  workerExtendedOpNode->groupClauseList,
-						  queryHasAggregates, &workerExtendedOpNode->distinctClause,
-						  &workerExtendedOpNode->hasDistinctOn,
-						  &distinctPreventsLimitPushdown);
+	PrcoessDistinctClauseForWorkerQuery(originalDistinctClause, hasDistinctOn,
+										workerExtendedOpNode->groupClauseList,
+										queryHasAggregates,
+										&workerExtendedOpNode->distinctClause,
+										&workerExtendedOpNode->hasDistinctOn,
+										&distinctPreventsLimitPushdown);
 
-	ProcessWorkerWindowFunctions(originalWindowClause, originalTargetEntryList,
-								 &workerExtendedOpNode->windowClause,
-								 &workerExtendedOpNode->hasWindowFuncs,
-								 &workerExtendedOpNode->targetList,
-								 &targetProjectionNumber, &nextSortGroupRefIndex);
+	ProcessWindowFunctionsForWorkerQuery(originalWindowClause, originalTargetEntryList,
+										 &workerExtendedOpNode->windowClause,
+										 &workerExtendedOpNode->hasWindowFuncs,
+										 &workerExtendedOpNode->targetList,
+										 &targetProjectionNumber, &nextSortGroupRefIndex);
 
 	/*
 	 * Order by and limit clauses are relevant to each other, and processing
@@ -1951,14 +1958,15 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 								   originalSortClauseList,
 								   originalTargetEntryList);
 
-		ProcessLimitOrderByClauses(limitOrderByStats, originalLimitCount,
-								   originalLimitOffset, originalSortClauseList,
-								   originalGroupClauseList, originalTargetEntryList,
-								   &workerExtendedOpNode->limitCount,
-								   &workerExtendedOpNode->sortClauseList,
-								   &workerExtendedOpNode->targetList,
-								   &targetProjectionNumber,
-								   &nextSortGroupRefIndex);
+		ProcessLimitOrderByForWorkerQuery(limitOrderByStats, originalLimitCount,
+										  originalLimitOffset, originalSortClauseList,
+										  originalGroupClauseList,
+										  originalTargetEntryList,
+										  &workerExtendedOpNode->limitCount,
+										  &workerExtendedOpNode->sortClauseList,
+										  &workerExtendedOpNode->targetList,
+										  &targetProjectionNumber,
+										  &nextSortGroupRefIndex);
 	}
 
 	return workerExtendedOpNode;
@@ -1966,18 +1974,20 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 
 
 /*
- * ProcessWorkerTargetList gets the inputs and modify the outputs in a way that
- * the worker query's target list and group by clauses are started to be
- * generated based on the inputs.
+ * ProcessTargetListForWorkerQuery gets the inputs and modify the outputs in a
+ * way that the worker query's target list and group by clauses are started
+ * to be generated based on the inputs.
  *
  *     inputs: targetEntryList, extendedOpNodeStats
  *     outputs: newTargetEntryList, targetProjectionNumber, groupClauseList,
  *              nextSortGroupRefIndex
  */
 static void
-ProcessWorkerTargetList(List *targetEntryList, ExtendedOpNodeStats *extendedOpNodeStats,
-						List **newTargetEntryList, AttrNumber *targetProjectionNumber,
-						List **groupClauseList, Index *nextSortGroupRefIndex)
+ProcessTargetListForWorkerQuery(List *targetEntryList,
+								ExtendedOpNodeStats *extendedOpNodeStats,
+								List **newTargetEntryList,
+								AttrNumber *targetProjectionNumber,
+								List **groupClauseList, Index *nextSortGroupRefIndex)
 {
 	ListCell *targetEntryCell = NULL;
 	WorkerAggregateWalkerContext *workerAggContext =
@@ -2038,10 +2048,12 @@ ProcessWorkerTargetList(List *targetEntryList, ExtendedOpNodeStats *extendedOpNo
  *              groupClauseList, nextSortGroupRefIndex
  */
 static void
-ProcessHavingClause(Node *originalHavingQual, ExtendedOpNodeStats *extendedOpNodeStats,
-					Node **workerHavingQual, List **newTargetEntryList,
-					AttrNumber *targetProjectionNumber, List **groupClauseList,
-					Index *nextSortGroupRefIndex)
+ProcessHavingClauseForWorkerQuery(Node *originalHavingQual,
+								  ExtendedOpNodeStats *extendedOpNodeStats,
+								  Node **workerHavingQual, List **newTargetEntryList,
+								  AttrNumber *targetProjectionNumber,
+								  List **groupClauseList,
+								  Index *nextSortGroupRefIndex)
 {
 	List *newExpressionList = NIL;
 	TargetEntry *targetEntry = NULL;
@@ -2085,8 +2097,8 @@ ProcessHavingClause(Node *originalHavingQual, ExtendedOpNodeStats *extendedOpNod
 
 
 /*
- * PrcoessDistinctClause gets the inputs and modifies the outputs in a way
- * that worker query's DISTINCT and DISTINCT ON clauses are set accordingly.
+ * PrcoessDistinctClauseForWorkerQuery gets the inputs and modifies the outputs
+ * in a way that worker query's DISTINCT and DISTINCT ON clauses are set accordingly.
  * The function also sets distinctPreventsLimitPushdown. As the name reveals,
  * distinct could prevent pushwing down LIMIT clauses later in the planning.
  * For the details, see the comments in the function.
@@ -2096,9 +2108,11 @@ ProcessHavingClause(Node *originalHavingQual, ExtendedOpNodeStats *extendedOpNod
  *
  */
 static void
-PrcoessDistinctClause(List *distinctClause, bool hasDistinctOn, List *groupClauseList,
-					  bool queryHasAggregates, List **workerDistinctClause,
-					  bool *workerHasDistinctOn, bool *distinctPreventsLimitPushdown)
+PrcoessDistinctClauseForWorkerQuery(List *distinctClause, bool hasDistinctOn,
+									List *groupClauseList,
+									bool queryHasAggregates, List **workerDistinctClause,
+									bool *workerHasDistinctOn,
+									bool *distinctPreventsLimitPushdown)
 {
 	bool distinctClauseSupersetofGroupClause = false;
 	bool shouldPushdownDistinct = false;
@@ -2146,9 +2160,9 @@ PrcoessDistinctClause(List *distinctClause, bool hasDistinctOn, List *groupClaus
 
 
 /*
- * ProcessLimitOrderByClauses gets the inputs and modifies the outputs in a way
- * that worker query's LIMIT and ORDER BY clauses are set accordingly. Adding
- * entries to ORDER BY might trigger adding new entries to newTargetEntryList.
+ * ProcessLimitOrderByForWorkerQuery gets the inputs and modifies the outputs
+ * in a way that worker query's LIMIT and ORDER BY clauses are set accordingly.
+ * Adding entries to ORDER BY might trigger adding new entries to newTargetEntryList.
  * See GenerateNewTargetEntriesForSortClauses() for the details.
  *
  *     inputs: sortLimitClauseStats, originalLimitCount, limitOffset,
@@ -2157,13 +2171,13 @@ PrcoessDistinctClause(List *distinctClause, bool hasDistinctOn, List *groupClaus
  *              targetProjectionNumber, nextSortGroupRefIndex
  */
 static void
-ProcessLimitOrderByClauses(LimitOrderByStats sortLimitClauseStats,
-						   Node *originalLimitCount, Node *limitOffset,
-						   List *sortClauseList, List *groupClauseList,
-						   List *originalTargetList, Node **workerLimitCount,
-						   List **workerSortClauseList, List **newTargetEntryList,
-						   AttrNumber *targetProjectionNumber,
-						   Index *nextSortGroupRefIndex)
+ProcessLimitOrderByForWorkerQuery(LimitOrderByStats sortLimitClauseStats,
+								  Node *originalLimitCount, Node *limitOffset,
+								  List *sortClauseList, List *groupClauseList,
+								  List *originalTargetList, Node **workerLimitCount,
+								  List **workerSortClauseList, List **newTargetEntryList,
+								  AttrNumber *targetProjectionNumber,
+								  Index *nextSortGroupRefIndex)
 {
 	List *newTargetEntryListForSortClauses = NIL;
 
@@ -2212,7 +2226,7 @@ BuildLimitOrderByStats(bool hasDistinctOn, bool groupedByDisjointPartitionColumn
 
 
 /*
- * ProcessWorkerWindowFunctions gets the inputs and modifies the outputs in a way
+ * ProcessWindowFunctionsForWorkerQuery gets the inputs and modifies the outputs in a way
  * that worker query's workerWindowClauseList is set.
  *
  *     inputs: windowClauseList, originalTargetEntryList
@@ -2220,11 +2234,13 @@ BuildLimitOrderByStats(bool hasDistinctOn, bool groupedByDisjointPartitionColumn
  *
  */
 static void
-ProcessWorkerWindowFunctions(List *windowClauseList, List *originalTargetEntryList,
-							 List **workerWindowClauseList, bool *hasWindowFunctions,
-							 List **newTargetEntryList,
-							 AttrNumber *targetProjectionNumber,
-							 Index *nextSortGroupRefIndex)
+ProcessWindowFunctionsForWorkerQuery(List *windowClauseList,
+									 List *originalTargetEntryList,
+									 List **workerWindowClauseList,
+									 bool *hasWindowFunctions,
+									 List **newTargetEntryList,
+									 AttrNumber *targetProjectionNumber,
+									 Index *nextSortGroupRefIndex)
 {
 	ListCell *windowClauseCell = NULL;
 
