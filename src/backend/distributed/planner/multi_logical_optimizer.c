@@ -161,6 +161,13 @@ static void PrcoessDistinctClauseForWorkerQuery(List *distinctClause, bool hasDi
 												List **workerDistinctClause,
 												bool *workerHasDistinctOn,
 												bool *distinctPreventsLimitPushdown);
+static void ProcessWindowFunctionsForWorkerQuery(List *windowClauseList,
+												 List *originalTargetEntryList,
+												 List **workerWindowClauseList,
+												 bool *hasWindowFunctions,
+												 List **newTargetEntryList,
+												 AttrNumber *targetProjectionNumber,
+												 Index *nextSortGroupRefIndex);
 static void ProcessLimitOrderByForWorkerQuery(LimitOrderByStats sortLimitClauseStats,
 											  Node *originalLimitCount, Node *limitOffset,
 											  List *sortClauseList, List *groupClauseList,
@@ -175,13 +182,6 @@ static LimitOrderByStats BuildLimitOrderByStats(bool hasDistinctOn, bool
 												List *groupClause,
 												List *sortClauseList,
 												List *targetList);
-static void ProcessWindowFunctionsForWorkerQuery(List *windowClauseList,
-												 List *originalTargetEntryList,
-												 List **workerWindowClauseList,
-												 bool *hasWindowFunctions,
-												 List **newTargetEntryList,
-												 AttrNumber *targetProjectionNumber,
-												 Index *nextSortGroupRefIndex);
 static void ProcessWorkerExpressionList(List *expressionList,
 										TargetEntry *originalTargetEntry,
 										bool addToGroupByClause,
@@ -2160,6 +2160,58 @@ PrcoessDistinctClauseForWorkerQuery(List *distinctClause, bool hasDistinctOn,
 
 
 /*
+ * ProcessWindowFunctionsForWorkerQuery gets the inputs and modifies the outputs in a way
+ * that worker query's workerWindowClauseList is set.
+ *
+ *     inputs: windowClauseList, originalTargetEntryList
+ *     outputs: workerWindowClauseList, newTargetEntryList, targetProjectionNumber, nextSortGroupRefIndex
+ *
+ */
+static void
+ProcessWindowFunctionsForWorkerQuery(List *windowClauseList,
+									 List *originalTargetEntryList,
+									 List **workerWindowClauseList,
+									 bool *hasWindowFunctions,
+									 List **newTargetEntryList,
+									 AttrNumber *targetProjectionNumber,
+									 Index *nextSortGroupRefIndex)
+{
+	ListCell *windowClauseCell = NULL;
+
+	if (windowClauseList == NIL)
+	{
+		*hasWindowFunctions = false;
+
+		return;
+	}
+
+	foreach(windowClauseCell, windowClauseList)
+	{
+		WindowClause *windowClause = (WindowClause *) lfirst(windowClauseCell);
+
+		List *partitionClauseTargetList =
+			GenerateNewTargetEntriesForSortClauses(originalTargetEntryList,
+												   windowClause->partitionClause,
+												   targetProjectionNumber,
+												   nextSortGroupRefIndex);
+		List *orderClauseTargetList =
+			GenerateNewTargetEntriesForSortClauses(originalTargetEntryList,
+												   windowClause->orderClause,
+												   targetProjectionNumber,
+												   nextSortGroupRefIndex);
+
+		*newTargetEntryList = list_concat(*newTargetEntryList,
+										  partitionClauseTargetList);
+		*newTargetEntryList = list_concat(*newTargetEntryList,
+										  orderClauseTargetList);
+	}
+
+	*workerWindowClauseList = windowClauseList;
+	*hasWindowFunctions = true;
+}
+
+
+/*
  * ProcessLimitOrderByForWorkerQuery gets the inputs and modifies the outputs
  * in a way that worker query's LIMIT and ORDER BY clauses are set accordingly.
  * Adding entries to ORDER BY might trigger adding new entries to newTargetEntryList.
@@ -2222,58 +2274,6 @@ BuildLimitOrderByStats(bool hasDistinctOn, bool groupedByDisjointPartitionColumn
 																targetList);
 
 	return limitOrderByStats;
-}
-
-
-/*
- * ProcessWindowFunctionsForWorkerQuery gets the inputs and modifies the outputs in a way
- * that worker query's workerWindowClauseList is set.
- *
- *     inputs: windowClauseList, originalTargetEntryList
- *     outputs: workerWindowClauseList, newTargetEntryList, targetProjectionNumber, nextSortGroupRefIndex
- *
- */
-static void
-ProcessWindowFunctionsForWorkerQuery(List *windowClauseList,
-									 List *originalTargetEntryList,
-									 List **workerWindowClauseList,
-									 bool *hasWindowFunctions,
-									 List **newTargetEntryList,
-									 AttrNumber *targetProjectionNumber,
-									 Index *nextSortGroupRefIndex)
-{
-	ListCell *windowClauseCell = NULL;
-
-	if (windowClauseList == NIL)
-	{
-		*hasWindowFunctions = false;
-
-		return;
-	}
-
-	foreach(windowClauseCell, windowClauseList)
-	{
-		WindowClause *windowClause = (WindowClause *) lfirst(windowClauseCell);
-
-		List *partitionClauseTargetList =
-			GenerateNewTargetEntriesForSortClauses(originalTargetEntryList,
-												   windowClause->partitionClause,
-												   targetProjectionNumber,
-												   nextSortGroupRefIndex);
-		List *orderClauseTargetList =
-			GenerateNewTargetEntriesForSortClauses(originalTargetEntryList,
-												   windowClause->orderClause,
-												   targetProjectionNumber,
-												   nextSortGroupRefIndex);
-
-		*newTargetEntryList = list_concat(*newTargetEntryList,
-										  partitionClauseTargetList);
-		*newTargetEntryList = list_concat(*newTargetEntryList,
-										  orderClauseTargetList);
-	}
-
-	*workerWindowClauseList = windowClauseList;
-	*hasWindowFunctions = true;
 }
 
 
