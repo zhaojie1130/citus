@@ -1872,14 +1872,10 @@ AddTypeConversion(Node *originalAggregate, Node *newExpression)
 
 /*
  * WorkerExtendedOpNode creates the worker extended operator node from the given
- * target entries. The function walks over these target entries; and for entries
- * with aggregates in them, this function calls the recursive aggregate walker
- * function to create aggregates for the worker nodes. Also, the function checks
- * if we can push down the limit to worker nodes; and if we can, sets the limit
- * count and sort clause list fields in the new operator node. It provides special
- * treatment for count distinct operator if it is used in repartition subqueries
- * or on non-partition columns. Each column in count distinct aggregate is added
- * to target list, and group by list of worker extended operator.
+ * originalOpNode and extendedOpNodeStats.
+ *
+ * For the details of the processing see the comments of the functions that
+ * are called from this function.
  */
 static MultiExtendedOp *
 WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
@@ -1974,13 +1970,23 @@ WorkerExtendedOpNode(MultiExtendedOp *originalOpNode,
 
 
 /*
- * ProcessTargetListForWorkerQuery gets the inputs and modify the outputs in a
- * way that the worker query's target list and group by clauses are started
- * to be generated based on the inputs.
+ * ProcessTargetListForWorkerQuery gets the inputs and modifies the outputs
+ * such that the worker query's target list and group by clauses are extended
+ * for the given inputs.
  *
  *     inputs: targetEntryList, extendedOpNodeStats
  *     outputs: newTargetEntryList, targetProjectionNumber, groupClauseList,
  *              nextSortGroupRefIndex
+ *
+ * In summary, the function walks over the input targetEntryList and for entries
+ * with aggregates in them, it calls the recursive aggregate walker function to
+ * create aggregates for the worker nodes.
+ *
+ * The function also handles count distinct operator if it is used in repartition
+ * subqueries or on non-partition columns (e.g., cannot be pushed down). Each
+ * column in count distinct aggregate is added to target list, and group by
+ * list of worker extended operator. This approach guarantees the distinctness
+ * in the worker queries.
  */
 static void
 ProcessTargetListForWorkerQuery(List *targetEntryList,
@@ -2034,11 +2040,14 @@ ProcessTargetListForWorkerQuery(List *targetEntryList,
 
 
 /*
- * ProcessHavingClause gets the inputs and modify the outputs in a way that
- * the worker query's target list and group by clauses are extended to be
- * generated based on the inputs. The rationale is that Citus may need to apply
- * the HAVING clause on the coordinator. Thus, pull the necessary data from the
- * workers.
+ * ProcessHavingClauseForWorkerQuery gets the inputs and modifies the outputs
+ * such that the worker query's target list and group by clauses are extended
+ * based on the inputs. The rationale is that Citus may need to apply the HAVING
+ * clause on the coordinator. Thus, the updated entries are intended to pull
+ * the necessary data from the workers.
+ *
+ * The function also updates the workerHavingQual if the having clause can
+ * be safely pushed down to the worker query.
  *
  * TODO: Do we really need to pull anything to the coordinator if we're already
  * pushing down the HAVING clause?
@@ -2098,7 +2107,10 @@ ProcessHavingClauseForWorkerQuery(Node *originalHavingQual,
 
 /*
  * PrcoessDistinctClauseForWorkerQuery gets the inputs and modifies the outputs
- * in a way that worker query's DISTINCT and DISTINCT ON clauses are set accordingly.
+ * such that worker query's DISTINCT and DISTINCT ON clauses are set accordingly.
+ * Note the the function may or may not decide to pushdown the DISTINCT and DISTINCT
+ * on clauses based on the inputs. See the details in the function.
+ *
  * The function also sets distinctPreventsLimitPushdown. As the name reveals,
  * distinct could prevent pushwing down LIMIT clauses later in the planning.
  * For the details, see the comments in the function.
@@ -2160,11 +2172,17 @@ PrcoessDistinctClauseForWorkerQuery(List *distinctClause, bool hasDistinctOn,
 
 
 /*
- * ProcessWindowFunctionsForWorkerQuery gets the inputs and modifies the outputs in a way
- * that worker query's workerWindowClauseList is set.
+ * ProcessWindowFunctionsForWorkerQuery gets the inputs and modifies the outputs such
+ * that worker query's workerWindowClauseList is set when the window clauses are safe to
+ * pushdown.
+ *
+ * TODO: Citus only supports pushing down window clauses as-is under certain circumstances.
+ * It should also be possible to pull the relevant data to the coordinator and apply the
+ * window clauses for the remaining cases.
  *
  *     inputs: windowClauseList, originalTargetEntryList
- *     outputs: workerWindowClauseList, newTargetEntryList, targetProjectionNumber, nextSortGroupRefIndex
+ *     outputs: workerWindowClauseList, hasWindowFunctions, newTargetEntryList,
+ *              targetProjectionNumber, nextSortGroupRefIndex
  *
  */
 static void
@@ -2200,6 +2218,14 @@ ProcessWindowFunctionsForWorkerQuery(List *windowClauseList,
 												   targetProjectionNumber,
 												   nextSortGroupRefIndex);
 
+		/*
+		 * Note that even Citus does push down the window clauses as-is, we may still need to
+		 * add the generated entries to the target list. The reason is that the same aggragates
+		 * might be referred from another target entry that is a bare aggragate (e.g., no window
+		 * functions), which would have been mutated. For instance, when an average aggragate
+		 * is mutated on the target list, the window function would refer to a sum aggragate,
+		 * which is obviously wrong.
+		 */
 		*newTargetEntryList = list_concat(*newTargetEntryList,
 										  partitionClauseTargetList);
 		*newTargetEntryList = list_concat(*newTargetEntryList,
@@ -2213,9 +2239,12 @@ ProcessWindowFunctionsForWorkerQuery(List *windowClauseList,
 
 /*
  * ProcessLimitOrderByForWorkerQuery gets the inputs and modifies the outputs
- * in a way that worker query's LIMIT and ORDER BY clauses are set accordingly.
+ * such that worker query's LIMIT and ORDER BY clauses are set accordingly.
  * Adding entries to ORDER BY might trigger adding new entries to newTargetEntryList.
  * See GenerateNewTargetEntriesForSortClauses() for the details.
+ *
+ * For the decisions on whether to pushdown LIMIT and ORDER BY are documented
+ * in the functions that are called from this function.
  *
  *     inputs: sortLimitClauseStats, originalLimitCount, limitOffset,
  *             sortClauseList, groupClauseList, originalTargetList
@@ -2242,6 +2271,10 @@ ProcessLimitOrderByForWorkerQuery(LimitOrderByStats sortLimitClauseStats,
 							 sortClauseList,
 							 sortLimitClauseStats);
 
+	/*
+	 * TODO: Do we really need to add the target entries if we're not pushing
+	 * down ORDER BY?
+	 */
 	newTargetEntryListForSortClauses =
 		GenerateNewTargetEntriesForSortClauses(originalTargetList,
 											   *workerSortClauseList,
