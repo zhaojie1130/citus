@@ -600,6 +600,8 @@ CreateDistributedSelectPlan(uint64 planId, Query *originalQuery, Query *query,
 	MultiTreeRoot *logicalPlan = NULL;
 	List *subPlanList = NIL;
 
+	instr_time	planstart, planduration;
+	double planDurationMillis = 0.0;
 	/*
 	 * For select queries we, if router executor is enabled, first try to
 	 * plan the query as a router query. If not supported, otherwise try
@@ -722,9 +724,18 @@ CreateDistributedSelectPlan(uint64 planId, Query *originalQuery, Query *query,
 	 */
 	CheckNodeIsDumpable((Node *) logicalPlan);
 
+
+
+	INSTR_TIME_SET_CURRENT(planstart);
 	/* Create the physical plan */
 	distributedPlan = CreatePhysicalDistributedPlan(logicalPlan,
 													plannerRestrictionContext);
+	INSTR_TIME_SET_CURRENT(planduration);
+	INSTR_TIME_SUBTRACT(planduration, planstart);
+
+	planDurationMillis = INSTR_TIME_GET_MILLISEC(planduration);
+
+	elog(ERROR, "planning time %f milliseconds", planDurationMillis);
 
 	/* distributed plan currently should always succeed or error out */
 	Assert(distributedPlan && distributedPlan->planningError == NULL);
