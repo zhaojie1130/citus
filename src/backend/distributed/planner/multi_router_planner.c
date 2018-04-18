@@ -1382,7 +1382,7 @@ CreateTask(TaskType taskType)
 	task->upsertQuery = false;
 	task->replicationModel = REPLICATION_MODEL_INVALID;
 
-	task->insertSelectQuery = false;
+	task->modifyWithMultipleTableQuery = false;
 	task->relationShardList = NIL;
 
 	return task;
@@ -1482,10 +1482,18 @@ RouterJob(Query *originalQuery, PlannerRestrictionContext *plannerRestrictionCon
 				plannerRestrictionContext->relationRestrictionContext->
 				relationRestrictionList) > 1)
 		{
+			ListCell *taskCell = NULL;
 			job->taskList = QueryPushdownSqlTaskList(originalQuery, 0,
 													 plannerRestrictionContext->
 													 relationRestrictionContext,
 													 relationShardList, MODIFY_TASK);
+
+			foreach(taskCell, job->taskList)
+			{
+				Task *task = (Task *) lfirst(taskCell);
+				task->modifyWithMultipleTableQuery = true;
+			}
+
 		}
 		else
 		{

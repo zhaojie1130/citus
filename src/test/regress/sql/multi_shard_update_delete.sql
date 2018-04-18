@@ -248,6 +248,12 @@ CREATE TABLE events_test_table_local (user_id int, value_1 int, value_2 int, val
 9, 54, 21, 17
 \.
 
+CREATE TABLE test_table_1(id int, date_col timestamptz, col_3 int);
+INSERT INTO test_table_1 VALUES(1, '2014-04-05 08:32:12', 5);
+INSERT INTO test_table_1 VALUES(2, '2015-02-01 08:31:16', 7);
+INSERT INTO test_table_1 VALUES(3, '2011-01-12 08:35:19', 9);
+SELECT create_distributed_table('test_table_1', 'id');
+
 -- We can pushdown query if there is partition key equality
 UPDATE users_test_table
 SET    value_2 = 5
@@ -363,6 +369,10 @@ UPDATE users_test_table
 SET    value_2 = 6
 WHERE  value_1 IN (SELECT 2);
 
+UPDATE test_table_1
+SET    col_3 = 6
+WHERE  date_col IN (SELECT now());
+
 -- We can not pushdown a query if the target relation is reference table
 UPDATE users_reference_copy_table
 SET    value_2 = 5
@@ -475,12 +485,6 @@ UPDATE users_test_table SET value_2 = 5 WHERE CURRENT OF test_cursor;
 ROLLBACK;
 
 -- Stable functions are supported
-CREATE TABLE test_table_1(id int, date_col timestamptz, col_3 int);
-INSERT INTO test_table_1 VALUES(1, '2014-04-05 08:32:12', 5);
-INSERT INTO test_table_1 VALUES(2, '2015-02-01 08:31:16', 7);
-INSERT INTO test_table_1 VALUES(3, '2011-01-12 08:35:19', 9);
-SELECT create_distributed_table('test_table_1', 'id');
-
 SELECT * FROM test_table_1;
 UPDATE test_table_1 SET col_3 = 3 WHERE date_col < now();
 SELECT * FROM test_table_1;
