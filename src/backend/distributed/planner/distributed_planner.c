@@ -735,7 +735,7 @@ CreateDistributedSelectPlan(uint64 planId, Query *originalQuery, Query *query,
 
 	planDurationMillis = INSTR_TIME_GET_MILLISEC(planduration);
 
-	elog(ERROR, "planning time %f milliseconds", planDurationMillis);
+	elog(WARNING, "planning time %f milliseconds", planDurationMillis);
 
 	/* distributed plan currently should always succeed or error out */
 	Assert(distributedPlan && distributedPlan->planningError == NULL);
