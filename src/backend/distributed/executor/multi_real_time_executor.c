@@ -58,6 +58,29 @@ static uint32 TotalOpenConnectionCount(HTAB *workerHash);
 static void UpdateConnectionCounter(WorkerNodeState *workerNode,
 									ConnectAction connectAction);
 
+static void CompleteTaskExecution(TaskExecution *taskExecution);
+
+static void CompleteTaskExecution(TaskExecution *taskExecution)
+{
+	uint32 nodeIndex = 0;
+	for (nodeIndex = 0; nodeIndex < taskExecution->nodeCount; nodeIndex++)
+	{
+		taskExecution->taskStatusArray[nodeIndex] = EXEC_TASK_DONE;
+	}
+
+
+	{
+		StringInfo jobDirectoryName = MasterJobDirectoryName(taskExecution->jobId);
+		StringInfo taskFilename = TaskFilename(jobDirectoryName, taskExecution->taskId);
+
+		char *filename = taskFilename->data;
+		int fileFlags = (O_APPEND | O_CREAT | O_RDWR | O_TRUNC | PG_BINARY);
+		int fileMode = (S_IRUSR | S_IWUSR);
+
+		int32 fileDescriptor = BasicOpenFile(filename, fileFlags, fileMode);
+	}
+
+}
 
 /*
  * MultiRealTimeExecute loops over the given tasks, and manages their execution
@@ -73,7 +96,7 @@ MultiRealTimeExecute(Job *job)
 	ListCell *taskExecutionCell = NULL;
 	ListCell *taskCell = NULL;
 	uint32 failedTaskId = 0;
-	bool allTasksCompleted = false;
+	bool allTasksCompleted = true;
 	bool taskCompleted = false;
 	bool taskFailed = false;
 
@@ -92,6 +115,7 @@ MultiRealTimeExecute(Job *job)
 
 		TaskExecution *taskExecution = InitTaskExecution(task, EXEC_TASK_CONNECT_START);
 		taskExecutionList = lappend(taskExecutionList, taskExecution);
+		CompleteTaskExecution(taskExecution);
 	}
 
 	/* loop around until all tasks complete, one task fails, or user cancels */

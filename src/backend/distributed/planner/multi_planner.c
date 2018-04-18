@@ -214,6 +214,8 @@ CreateDistributedPlan(PlannedStmt *localPlan, Query *originalQuery, Query *query
 		if ((!distributedPlan || distributedPlan->planningError) && !hasUnresolvedParams)
 		{
 			/* Create and optimize logical plan */
+			instr_time	planstart, planduration;
+			double planDurationMillis = 0.0;
 			MultiTreeRoot *logicalPlan = MultiLogicalPlanCreate(query);
 			MultiLogicalPlanOptimize(logicalPlan);
 
@@ -225,9 +227,17 @@ CreateDistributedPlan(PlannedStmt *localPlan, Query *originalQuery, Query *query
 			 * physical plan, so there's no need to check that separately.
 			 */
 			CheckNodeIsDumpable((Node *) logicalPlan);
+			INSTR_TIME_SET_CURRENT(planstart);
+
 
 			/* Create the physical plan */
 			distributedPlan = MultiPhysicalPlanCreate(logicalPlan);
+			INSTR_TIME_SET_CURRENT(planduration);
+			INSTR_TIME_SUBTRACT(planduration, planstart);
+
+			planDurationMillis = INSTR_TIME_GET_MILLISEC(planduration);
+
+			elog(WARNING, "planning time %f milliseconds", planDurationMillis);
 
 			/* distributed plan currently should always succeed or error out */
 			Assert(distributedPlan && distributedPlan->planningError == NULL);
