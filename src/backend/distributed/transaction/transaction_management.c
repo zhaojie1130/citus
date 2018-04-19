@@ -206,6 +206,14 @@ CoordinatedTransactionCallback(XactEvent event, void *arg)
 			 */
 			PG_TRY();
 			{
+				/*
+				 * On Windows it's not possible to delete a file before you've
+				 * closed all handles to it. rmdir will return success but not take
+				 * effect) Since we're in an ABORT handler it's very likely that
+				 * not all handles have been closed, so force them closed here so
+				 * we can delete the files without causing any trouble.
+				 */
+				AtEOXact_Files();
 				RemoveIntermediateResultsDirectory();
 			}
 			PG_CATCH();
