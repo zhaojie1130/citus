@@ -30,6 +30,7 @@
 #include "utils/hsearch.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
+#include "storage/fd.h"
 
 
 CoordinatedTransactionState CurrentCoordinatedTransactionState = COORD_TRANS_NONE;
